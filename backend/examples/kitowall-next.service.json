@@ -1,0 +1,12 @@
+{
+  "unit_type": "service",
+  "id": "kitowall-next",
+  "unit_name": "kitowall-next.service",
+  "description": "Apply the next Kitowall wallpaper",
+  "exec_start": [
+    "/home/user/.local/bin/kitowall",
+    "rotate-now"
+  ],
+  "restart": "no",
+  "wanted_by": "default.target"
+}

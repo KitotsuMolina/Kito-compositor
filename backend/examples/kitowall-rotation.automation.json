@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "kitowall-next",
+  "description": "Rotate Kitowall static wallpapers",
+  "command": [
+    "/home/user/.local/bin/kitowall",
+    "rotate-now"
+  ],
+  "kind": "one_shot",
+  "restart": "no",
+  "autostart": false,
+  "schedule": {
+    "startup_delay_seconds": 2,
+    "every_seconds": 600
+  }
+}

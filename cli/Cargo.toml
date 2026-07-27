@@ -1,0 +1,14 @@
+[package]
+name = "kitsune-compositor-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kitsune-compositor"
+path = "src/main.rs"
+
+[dependencies]
+kitsune-compositor-backend = { path = "../backend" }
+serde.workspace = true
+serde_json.workspace = true

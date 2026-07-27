@@ -1,0 +1,10 @@
+{
+  "unit_type": "timer",
+  "id": "kitowall-next-timer",
+  "unit_name": "kitowall-next.timer",
+  "description": "Rotate Kitowall wallpapers periodically",
+  "target_unit": "kitowall-next.service",
+  "on_boot_sec": "1m",
+  "on_unit_active_sec": "5m",
+  "wanted_by": "timers.target"
+}
