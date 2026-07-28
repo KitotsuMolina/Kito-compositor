@@ -1,5 +1,5 @@
 use super::{bool_value, f64_value, first, nested, string, u32_value};
-use crate::{HostRunner, Output};
+use crate::{ApplicationWindow, HostRunner, Output};
 use serde_json::{Map, Value};
 
 pub(super) fn available<R: HostRunner>(runner: &R) -> bool {
@@ -11,6 +11,10 @@ pub(super) fn available<R: HostRunner>(runner: &R) -> bool {
 
 pub(super) fn outputs<R: HostRunner>(runner: &R) -> Result<Vec<Output>, String> {
     parse(runner.run_json("niri", &["msg", "--json", "outputs"])?)
+}
+
+pub(super) fn windows<R: HostRunner>(runner: &R) -> Result<Vec<ApplicationWindow>, String> {
+    parse_windows(runner.run_json("niri", &["msg", "--json", "windows"])?)
 }
 
 fn parse(value: Value) -> Result<Vec<Output>, String> {
@@ -28,6 +32,35 @@ fn parse(value: Value) -> Result<Vec<Output>, String> {
         return Err("niri outputs json did not expose any recognizable outputs".into());
     }
     Ok(outputs)
+}
+
+fn parse_windows(value: Value) -> Result<Vec<ApplicationWindow>, String> {
+    let items = value
+        .as_array()
+        .or_else(|| value.get("windows").and_then(Value::as_array))
+        .ok_or_else(|| "niri windows did not return a json array".to_string())?;
+    items
+        .iter()
+        .map(|item| {
+            let object = item
+                .as_object()
+                .ok_or_else(|| "niri window entry is not an object".to_string())?;
+            Ok(ApplicationWindow {
+                app_id: string(first(object, &["app_id"]))
+                    .ok_or_else(|| "niri window entry missing app_id".to_string())?,
+                title: string(first(object, &["title"])),
+                pid: u32_value(first(object, &["pid"])),
+                output: string(first(object, &["output"])),
+                workspace: first(object, &["workspace_id"])
+                    .and_then(Value::as_u64)
+                    .map(|value| value.to_string()),
+                focused: bool_value(first(object, &["is_focused", "focused"])).unwrap_or(false),
+                fullscreen: bool_value(first(object, &["is_fullscreen", "fullscreen"]))
+                    .unwrap_or(false),
+                backend: "niri msg".into(),
+            })
+        })
+        .collect()
 }
 
 fn collect<'a>(value: &'a Value, outputs: &mut Vec<&'a Map<String, Value>>) {
@@ -109,5 +142,20 @@ mod tests {
         assert_eq!(outputs[0].name, "eDP-1");
         assert_eq!(outputs[0].refresh_hz, Some(120.0));
         assert!(outputs[0].focused);
+    }
+
+    #[test]
+    fn normalizes_niri_windows() {
+        let windows = parse_windows(serde_json::json!([{
+            "app_id": "org.example.Game",
+            "title": "Game",
+            "pid": 84,
+            "workspace_id": 3,
+            "is_focused": true,
+            "is_fullscreen": true
+        }]))
+        .unwrap();
+        assert_eq!(windows[0].workspace.as_deref(), Some("3"));
+        assert!(windows[0].fullscreen);
     }
 }

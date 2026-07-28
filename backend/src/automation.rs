@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::{ProcessExecutor, RestartPolicy, UnitDescriptor, UnitManager, UnitRecord, UnitStatus};
 
@@ -22,6 +23,8 @@ pub struct AutomationDescriptor {
     pub id: String,
     pub description: String,
     pub command: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub environment: BTreeMap<String, String>,
     pub kind: AutomationKind,
     #[serde(default)]
     pub restart: RestartPolicy,
@@ -185,10 +188,8 @@ fn plan_systemd(descriptor: &AutomationDescriptor) -> Result<AutomationPlan, Str
         unit_name: service_name.clone(),
         description: descriptor.description.clone(),
         exec_start: descriptor.command.clone(),
-        restart: match descriptor.kind {
-            AutomationKind::OneShot => RestartPolicy::No,
-            AutomationKind::Daemon => descriptor.restart,
-        },
+        environment: descriptor.environment.clone(),
+        restart: descriptor.restart,
         wanted_by: "default.target".into(),
     }];
     if let Some(schedule) = &descriptor.schedule {
@@ -197,7 +198,8 @@ fn plan_systemd(descriptor: &AutomationDescriptor) -> Result<AutomationPlan, Str
             unit_name: format!("{}.timer", descriptor.id),
             description: format!("Schedule: {}", descriptor.description),
             target_unit: service_name,
-            on_boot_sec: schedule
+            on_boot_sec: None,
+            on_active_sec: schedule
                 .startup_delay_seconds
                 .map(|seconds| format!("{seconds}s")),
             on_unit_active_sec: Some(format!("{}s", schedule.every_seconds)),
@@ -236,8 +238,22 @@ fn validate(descriptor: &AutomationDescriptor) -> Result<(), String> {
     {
         return Err("automation command contains a null byte".into());
     }
-    if descriptor.kind == AutomationKind::OneShot && descriptor.restart != RestartPolicy::No {
-        return Err("one-shot automation cannot use a restart policy".into());
+    for (key, value) in &descriptor.environment {
+        if key.is_empty()
+            || !key.chars().enumerate().all(|(index, character)| {
+                character == '_'
+                    || character.is_ascii_alphabetic()
+                    || (index > 0 && character.is_ascii_digit())
+            })
+        {
+            return Err(format!("invalid automation environment key: {key}"));
+        }
+        if value.contains('\0') || value.contains(['\n', '\r']) {
+            return Err(format!("invalid automation environment value for {key}"));
+        }
+    }
+    if descriptor.kind == AutomationKind::OneShot && descriptor.restart == RestartPolicy::Always {
+        return Err("one-shot automation cannot always restart".into());
     }
     if let Some(schedule) = &descriptor.schedule {
         if descriptor.kind != AutomationKind::OneShot {
@@ -262,6 +278,7 @@ mod tests {
                 id: "kitowall-next".into(),
                 description: "Rotate static wallpaper".into(),
                 command: vec!["/opt/kitowall/bin/kitowall".into(), "rotate-now".into()],
+                environment: BTreeMap::new(),
                 kind: AutomationKind::OneShot,
                 restart: RestartPolicy::No,
                 autostart: false,
@@ -278,6 +295,8 @@ mod tests {
         assert!(matches!(plan.artifacts[1], UnitDescriptor::Timer { .. }));
         let json = serde_json::to_value(plan).unwrap();
         assert_eq!(json["manager"], "systemd-user");
+        assert_eq!(json["artifacts"][1]["on_active_sec"], "2s");
+        assert!(json["artifacts"][1]["on_boot_sec"].is_null());
         assert_eq!(json["artifacts"][1]["on_unit_active_sec"], "600s");
     }
 
@@ -288,8 +307,51 @@ mod tests {
             id: "bad.service".into(),
             description: "Bad".into(),
             command: vec!["kitowall".into()],
+            environment: BTreeMap::new(),
             kind: AutomationKind::Daemon,
             restart: RestartPolicy::OnFailure,
+            autostart: true,
+            schedule: None,
+        };
+        assert!(plan_automation(&descriptor, ServiceManagerKind::SystemdUser).is_err());
+    }
+
+    #[test]
+    fn portable_one_shot_preserves_retry_policy() {
+        let plan = plan_automation(
+            &AutomationDescriptor {
+                schema_version: 1,
+                id: "kitowall-login-apply".into(),
+                description: "Restore wallpaper after login".into(),
+                command: vec!["/opt/kitowall/bin/kitowall".into(), "rotate-now".into()],
+                environment: BTreeMap::new(),
+                kind: AutomationKind::OneShot,
+                restart: RestartPolicy::OnFailure,
+                autostart: true,
+                schedule: None,
+            },
+            ServiceManagerKind::SystemdUser,
+        )
+        .unwrap();
+        assert!(matches!(
+            plan.artifacts[0],
+            UnitDescriptor::Service {
+                restart: RestartPolicy::OnFailure,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn portable_one_shot_rejects_unconditional_restart() {
+        let descriptor = AutomationDescriptor {
+            schema_version: 1,
+            id: "bad-loop".into(),
+            description: "Never settle".into(),
+            command: vec!["/opt/tool".into()],
+            environment: BTreeMap::new(),
+            kind: AutomationKind::OneShot,
+            restart: RestartPolicy::Always,
             autostart: true,
             schedule: None,
         };

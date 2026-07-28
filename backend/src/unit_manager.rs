@@ -31,6 +31,8 @@ pub enum UnitDescriptor {
         unit_name: String,
         description: String,
         exec_start: Vec<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        environment: BTreeMap<String, String>,
         #[serde(default)]
         restart: RestartPolicy,
         #[serde(default = "default_target")]
@@ -43,6 +45,8 @@ pub enum UnitDescriptor {
         target_unit: String,
         #[serde(default)]
         on_boot_sec: Option<String>,
+        #[serde(default)]
+        on_active_sec: Option<String>,
         #[serde(default)]
         on_unit_active_sec: Option<String>,
         #[serde(default = "default_timer_target")]
@@ -371,6 +375,7 @@ fn render(descriptor: &UnitDescriptor) -> Result<(String, String, String), Strin
             unit_name,
             description,
             exec_start,
+            environment,
             restart,
             wanted_by,
         } => {
@@ -384,16 +389,29 @@ fn render(descriptor: &UnitDescriptor) -> Result<(String, String, String), Strin
             for argument in exec_start {
                 validate_argument(argument)?;
             }
+            let mut environment_lines = String::new();
+            for (key, value) in environment {
+                validate_environment(key, value)?;
+                environment_lines.push_str("Environment=");
+                environment_lines.push_str(&quote_systemd(&format!("{key}={value}")));
+                environment_lines.push('\n');
+            }
             let command = exec_start
                 .iter()
                 .map(|argument| quote_systemd(argument))
                 .collect::<Vec<_>>()
                 .join(" ");
+            let restart_delay = match restart {
+                RestartPolicy::No => "",
+                RestartPolicy::OnFailure | RestartPolicy::Always => "RestartSec=2s\n",
+            };
             let content = format!(
-                "[Unit]\nDescription={}\n\n[Service]\nType=simple\nExecStart={}\nRestart={}\n\n[Install]\nWantedBy={}\n",
+                "[Unit]\nDescription={}\n\n[Service]\nType=simple\n{}ExecStart={}\nRestart={}\n{}\n[Install]\nWantedBy={}\n",
                 escape_percent(description),
+                environment_lines,
                 command,
                 restart.as_systemd(),
+                restart_delay,
                 wanted_by
             );
             Ok((id.clone(), unit_name.clone(), content))
@@ -404,6 +422,7 @@ fn render(descriptor: &UnitDescriptor) -> Result<(String, String, String), Strin
             description,
             target_unit,
             on_boot_sec,
+            on_active_sec,
             on_unit_active_sec,
             wanted_by,
         } => {
@@ -412,13 +431,19 @@ fn render(descriptor: &UnitDescriptor) -> Result<(String, String, String), Strin
             validate_unit_name(target_unit, ".service")?;
             validate_text("description", description)?;
             validate_target(wanted_by)?;
-            if on_boot_sec.is_none() && on_unit_active_sec.is_none() {
-                return Err("timer requires on_boot_sec or on_unit_active_sec".into());
+            if on_boot_sec.is_none() && on_active_sec.is_none() && on_unit_active_sec.is_none() {
+                return Err(
+                    "timer requires on_boot_sec, on_active_sec or on_unit_active_sec".into(),
+                );
             }
             let mut timer = String::new();
             if let Some(value) = on_boot_sec {
                 validate_duration(value)?;
                 timer.push_str(&format!("OnBootSec={value}\n"));
+            }
+            if let Some(value) = on_active_sec {
+                validate_duration(value)?;
+                timer.push_str(&format!("OnActiveSec={value}\n"));
             }
             if let Some(value) = on_unit_active_sec {
                 validate_duration(value)?;
@@ -483,6 +508,22 @@ fn validate_text(label: &str, value: &str) -> Result<(), String> {
 fn validate_argument(value: &str) -> Result<(), String> {
     if value.is_empty() || value.chars().any(char::is_control) {
         return Err("service arguments cannot be empty or contain control characters".into());
+    }
+    Ok(())
+}
+
+fn validate_environment(key: &str, value: &str) -> Result<(), String> {
+    if key.is_empty()
+        || !key.chars().enumerate().all(|(index, character)| {
+            character == '_'
+                || character.is_ascii_alphabetic()
+                || (index > 0 && character.is_ascii_digit())
+        })
+    {
+        return Err(format!("invalid environment key: {key}"));
+    }
+    if value.contains('\0') || value.contains(['\n', '\r']) {
+        return Err(format!("invalid environment value for {key}"));
     }
     Ok(())
 }
@@ -599,13 +640,20 @@ mod tests {
                 unit_name: "kitowall-watch.service".into(),
                 description: "Kitowall 100% watcher".into(),
                 exec_start: vec!["/opt/Kitowall/bin/kitowall".into(), "watch outputs".into()],
+                environment: BTreeMap::from([
+                    ("KRC_QUALITY".into(), "ultra".into()),
+                    ("WITH_SPACE".into(), "one two".into()),
+                ]),
                 restart: RestartPolicy::OnFailure,
                 wanted_by: "default.target".into(),
             })
             .unwrap();
         assert!(plan.content.contains("Kitowall 100%% watcher"));
         assert!(plan.content.contains("\"watch outputs\""));
+        assert!(plan.content.contains("Environment=\"KRC_QUALITY=ultra\""));
+        assert!(plan.content.contains("Environment=\"WITH_SPACE=one two\""));
         assert!(plan.content.contains("Restart=on-failure"));
+        assert!(plan.content.contains("RestartSec=2s"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -628,6 +676,7 @@ mod tests {
                 executable.to_string_lossy().into_owned(),
                 "rotate-now".into(),
             ],
+            environment: BTreeMap::new(),
             restart: RestartPolicy::No,
             wanted_by: "default.target".into(),
         };
@@ -661,6 +710,7 @@ mod tests {
             description: "Bad timer".into(),
             target_unit: "kitowall-next.service".into(),
             on_boot_sec: Some("1m".into()),
+            on_active_sec: None,
             on_unit_active_sec: None,
             wanted_by: "timers.target".into(),
         });
@@ -712,6 +762,7 @@ mod tests {
             description: "Kitowall timer".into(),
             target_unit: "kitowall-next.service".into(),
             on_boot_sec: Some("1m".into()),
+            on_active_sec: None,
             on_unit_active_sec: Some("5m".into()),
             wanted_by: "timers.target".into(),
         };
@@ -722,6 +773,7 @@ mod tests {
                 unit_name: "kitowall-next.service".into(),
                 description: "Kitowall next".into(),
                 exec_start: vec![executable.to_string_lossy().into_owned()],
+                environment: BTreeMap::new(),
                 restart: RestartPolicy::No,
                 wanted_by: "default.target".into(),
             })
@@ -754,6 +806,7 @@ mod tests {
                         executable.to_string_lossy().into_owned(),
                         "rotate-now".into(),
                     ],
+                    environment: BTreeMap::new(),
                     restart: RestartPolicy::No,
                     wanted_by: "default.target".into(),
                 },
@@ -763,6 +816,7 @@ mod tests {
                     description: format!("Schedule: {description}"),
                     target_unit: "kitowall-next.service".into(),
                     on_boot_sec: Some("2s".into()),
+                    on_active_sec: None,
                     on_unit_active_sec: Some("600s".into()),
                     wanted_by: "timers.target".into(),
                 },
@@ -811,6 +865,7 @@ mod tests {
             unit_name: "kitowall-watch.service".into(),
             description: "Watch outputs".into(),
             exec_start: vec![executable.to_string_lossy().into_owned(), "watch".into()],
+            environment: BTreeMap::new(),
             restart: RestartPolicy::OnFailure,
             wanted_by: "default.target".into(),
         }]);

@@ -12,6 +12,9 @@ pub trait ProcessExecutor {
     fn command_exists(&self, binary: &str) -> bool;
     fn run(&self, binary: &str, args: &[String]) -> Result<ProcessOutput, String>;
     fn spawn(&self, binary: &str, args: &[String]) -> Result<u32, String>;
+    fn run_foreground(&self, binary: &str, args: &[String]) -> Result<(), String> {
+        self.run(binary, args).map(|_| ())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -57,5 +60,16 @@ impl ProcessExecutor for SystemProcessExecutor {
             .spawn()
             .map(|child| child.id())
             .map_err(|error| format!("failed to start {binary}: {error}"))
+    }
+
+    fn run_foreground(&self, binary: &str, args: &[String]) -> Result<(), String> {
+        let status = Command::new(binary)
+            .args(args)
+            .status()
+            .map_err(|error| format!("failed to execute {binary}: {error}"))?;
+        if !status.success() {
+            return Err(format!("{binary} exited with status {status}"));
+        }
+        Ok(())
     }
 }

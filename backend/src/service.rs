@@ -1,6 +1,7 @@
 use crate::provider;
 use crate::{
-    Capabilities, CompositorKind, Detection, DoctorCheck, DoctorReport, HostRunner, Output, Status,
+    ApplicationCatalog, Capabilities, CompositorKind, Detection, DoctorCheck, DoctorReport,
+    HostRunner, InstalledApplication, Output, RunningApplication, Status,
 };
 
 pub struct CompositorBackend<R> {
@@ -41,6 +42,20 @@ impl<R: HostRunner> CompositorBackend<R> {
         Ok((kind, outputs.iter().any(|output| output.name == name)))
     }
 
+    pub fn installed_applications(&self) -> Vec<InstalledApplication> {
+        ApplicationCatalog::installed()
+    }
+
+    pub fn running_applications(&self) -> Vec<RunningApplication> {
+        let detection = self.detect();
+        let windows = detection
+            .ok
+            .then(|| provider::windows(detection.compositor, &self.runner))
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        ApplicationCatalog::running(windows)
+    }
+
     pub fn status(&self) -> Result<Status, String> {
         let detection = self.detect();
         if !detection.ok {
@@ -64,6 +79,8 @@ impl<R: HostRunner> CompositorBackend<R> {
             output_focus: detection.ok,
             output_events: detection.ok,
             focus_events: detection.ok,
+            application_catalog: true,
+            application_runtime: true,
             wallpaper_runtime: false,
             service_runtime: false,
         }

@@ -1,3 +1,4 @@
+mod applications;
 mod automation;
 mod events;
 mod model;
@@ -8,6 +9,7 @@ mod service;
 mod unit_manager;
 mod wallpaper;
 
+pub use applications::{ApplicationCatalog, application_matches};
 pub use automation::{
     AutomationBatchDescriptor, AutomationDescriptor, AutomationKind, AutomationPlan,
     AutomationStatus, Schedule, ServiceManagerKind, control_automation, detect_service_manager,
@@ -15,7 +17,8 @@ pub use automation::{
 };
 pub use events::EventTracker;
 pub use model::{
-    Capabilities, CompositorKind, Detection, DoctorCheck, DoctorReport, Output, Status,
+    ApplicationWindow, Capabilities, CompositorKind, Detection, DoctorCheck, DoctorReport,
+    InstalledApplication, Output, RunningApplication, Status,
 };
 pub use process::{ProcessExecutor, ProcessOutput, SystemProcessExecutor};
 pub use runner::{HostRunner, SystemHostRunner};

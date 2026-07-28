@@ -108,6 +108,13 @@ impl<E: ProcessExecutor> WallpaperRuntime<E> {
         ))
     }
 
+    pub fn serve(&self, namespace: &str) -> Result<(), String> {
+        validate_identifier("namespace", namespace)?;
+        let backend = self.resolve_backend()?;
+        self.executor
+            .run_foreground(daemon_binary(backend), &start_args(backend, namespace))
+    }
+
     pub fn stop(&self, namespace: &str) -> Result<WallpaperRuntimeStatus, String> {
         let current = self.status(namespace)?;
         if !current.running {
@@ -342,5 +349,20 @@ mod tests {
             transition: WallpaperTransition::default(),
         };
         assert!(validate_request(&request).is_err());
+    }
+
+    #[test]
+    fn serves_the_runtime_in_the_foreground() {
+        let runtime = WallpaperRuntime::new(FakeExecutor {
+            commands: ["awww".into(), "awww-daemon".into()].into_iter().collect(),
+            ..Default::default()
+        });
+        runtime.serve("kitowall").unwrap();
+        let calls = runtime.executor.calls.borrow();
+        assert_eq!(calls[0].0, "awww-daemon");
+        assert_eq!(
+            calls[0].1,
+            ["--layer", "background", "--namespace", "kitowall"]
+        );
     }
 }

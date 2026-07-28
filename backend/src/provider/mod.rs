@@ -1,7 +1,7 @@
 mod hyprland;
 mod niri;
 
-use crate::{CompositorKind, HostRunner, Output};
+use crate::{ApplicationWindow, CompositorKind, HostRunner, Output};
 use serde_json::{Map, Value};
 
 pub(crate) fn available<R: HostRunner>(kind: CompositorKind, runner: &R) -> bool {
@@ -20,6 +20,17 @@ pub(crate) fn outputs<R: HostRunner>(
         CompositorKind::Hyprland => hyprland::outputs(runner),
         CompositorKind::Niri => niri::outputs(runner),
         CompositorKind::Unknown => Err("no supported compositor provider responded".into()),
+    }
+}
+
+pub(crate) fn windows<R: HostRunner>(
+    kind: CompositorKind,
+    runner: &R,
+) -> Result<Vec<ApplicationWindow>, String> {
+    match kind {
+        CompositorKind::Hyprland => hyprland::windows(runner),
+        CompositorKind::Niri => niri::windows(runner),
+        CompositorKind::Unknown => Err("no supported window provider responded".into()),
     }
 }
 

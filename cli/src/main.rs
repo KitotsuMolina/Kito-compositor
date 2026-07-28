@@ -1,7 +1,7 @@
 use kitsune_compositor_backend::{
     AutomationBatchDescriptor, AutomationDescriptor, SystemProcessExecutor, WallpaperApplyRequest,
-    WallpaperRuntime, WallpaperTransition, control_automation, detect_service_manager,
-    plan_automation, plan_automation_batch, remove_automation,
+    WallpaperRuntime, WallpaperTransition, application_matches, control_automation,
+    detect_service_manager, plan_automation, plan_automation_batch, remove_automation,
 };
 use kitsune_compositor_backend::{CompositorBackend, EventTracker, HostRunner, SystemHostRunner};
 use kitsune_compositor_backend::{UnitDescriptor, UnitManager};
@@ -75,9 +75,11 @@ Commands:\n\
   outputs [--json] [--contract-v1]\n\
   focused-output [--json] [--contract-v1]\n\
   validate-output <name> [--json] [--contract-v1]\n\
+  applications list|running [--json] [--contract-v1]\n\
+  applications match --ids <desktop-id,...> [--json] [--contract-v1]\n\
   watch outputs|focus [--json-lines] [--contract-v1] [--poll-ms <n>] [--once]\n\
   wallpaper status --namespace <name> [--json] [--contract-v1]\n\
-  wallpaper start|stop --namespace <name> [--json] [--contract-v1]\n\
+  wallpaper start|stop|serve --namespace <name> [--json] [--contract-v1]\n\
   wallpaper apply --namespace <name> --output <name> --image <absolute-path> [transition options]\n\
   automation plan|apply --descriptor <absolute-json-path> [--json] [--contract-v1]\n\
   automation plan-batch|apply-batch --descriptor <absolute-json-path> [--json] [--contract-v1]\n\
@@ -199,6 +201,7 @@ fn dispatch(args: &[String], json: bool, contract: bool) -> Result<(), String> {
             }
         }
         Some("watch") => run_watch(args, &backend)?,
+        Some("applications") => run_applications(args, &backend, json, contract)?,
         Some("wallpaper") => run_wallpaper(args, &backend, json, contract)?,
         Some("automation") => run_automation(args, json, contract)?,
         Some("service") => run_service(args, json, contract)?,
@@ -249,6 +252,8 @@ fn dispatch(args: &[String], json: bool, contract: bool) -> Result<(), String> {
                 println!("output_focus: {}", capabilities.output_focus);
                 println!("output_events: {}", capabilities.output_events);
                 println!("focus_events: {}", capabilities.focus_events);
+                println!("application_catalog: {}", capabilities.application_catalog);
+                println!("application_runtime: {}", capabilities.application_runtime);
                 println!("wallpaper_runtime: {}", capabilities.wallpaper_runtime);
                 println!("service_runtime: {}", capabilities.service_runtime);
             }
@@ -267,6 +272,82 @@ fn dispatch(args: &[String], json: bool, contract: bool) -> Result<(), String> {
         }
         Some("config") => return Err("invalid config command (use: config show)".into()),
         Some(other) => return Err(format!("unknown command: {other}")),
+    }
+    Ok(())
+}
+
+fn run_applications(
+    args: &[String],
+    backend: &CompositorBackend<SystemHostRunner>,
+    json: bool,
+    contract: bool,
+) -> Result<(), String> {
+    let action = args
+        .get(2)
+        .map(String::as_str)
+        .ok_or_else(|| "missing applications action".to_string())?;
+    match action {
+        "list" => {
+            let applications = backend.installed_applications();
+            if json {
+                emit_json(
+                    "applications list",
+                    serde_json::json!({"applications": applications, "count": applications.len()}),
+                    contract,
+                );
+            } else {
+                for application in applications {
+                    println!("{}\t{}", application.id, application.name);
+                }
+            }
+        }
+        "running" => {
+            let applications = backend.running_applications();
+            if json {
+                emit_json(
+                    "applications running",
+                    serde_json::json!({"applications": applications, "count": applications.len()}),
+                    contract,
+                );
+            } else {
+                for application in applications {
+                    println!(
+                        "{}\t{}\t{}",
+                        application.id, application.name, application.backend
+                    );
+                }
+            }
+        }
+        "match" => {
+            let ids = required_option(args, "--ids")?
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if ids.is_empty() {
+                return Err("--ids requires at least one application id".into());
+            }
+            let applications = application_matches(&backend.running_applications(), &ids);
+            if json {
+                emit_json(
+                    "applications match",
+                    serde_json::json!({
+                        "matched": !applications.is_empty(),
+                        "applications": applications,
+                        "count": applications.len()
+                    }),
+                    contract,
+                );
+            } else {
+                println!("{}", !applications.is_empty());
+            }
+        }
+        _ => {
+            return Err(
+                "invalid applications action (use: list, running or match --ids <ids>)".into(),
+            );
+        }
     }
     Ok(())
 }
@@ -502,6 +583,15 @@ fn run_wallpaper<R: HostRunner>(
         "start" => {
             emit_wallpaper_result("wallpaper start", runtime.start(namespace)?, json, contract)
         }
+        "serve" => {
+            runtime.serve(namespace)?;
+            emit_wallpaper_result(
+                "wallpaper serve",
+                serde_json::json!({ "namespace": namespace, "stopped": true }),
+                json,
+                contract,
+            )
+        }
         "stop" => emit_wallpaper_result("wallpaper stop", runtime.stop(namespace)?, json, contract),
         "apply" => {
             let output = required_option(args, "--output")?;
@@ -539,7 +629,7 @@ fn run_wallpaper<R: HostRunner>(
                 println!("applied output={output} image={image}");
             }
         }
-        _ => return Err("wallpaper action must be status, start, stop or apply".into()),
+        _ => return Err("wallpaper action must be status, start, serve, stop or apply".into()),
     }
     Ok(())
 }
@@ -690,6 +780,9 @@ fn classify(error: &str) -> (&'static str, i32, Option<String>) {
         || error.starts_with("invalid config")
         || error.starts_with("output name cannot")
         || error.starts_with("missing watch target")
+        || error.starts_with("missing applications action")
+        || error.starts_with("invalid applications action")
+        || error.starts_with("--ids requires")
         || error.starts_with("watch target")
         || error.starts_with("--poll-ms")
         || error.starts_with("missing wallpaper action")

@@ -41,6 +41,39 @@ pub struct Output {
     pub backend: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplicationWindow {
+    pub app_id: String,
+    pub title: Option<String>,
+    pub pid: Option<u32>,
+    pub output: Option<String>,
+    pub workspace: Option<String>,
+    pub focused: bool,
+    pub fullscreen: bool,
+    pub backend: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledApplication {
+    pub id: String,
+    pub name: String,
+    pub executable: Option<String>,
+    pub icon: Option<String>,
+    pub desktop_file: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunningApplication {
+    pub id: String,
+    pub name: String,
+    pub app_id: String,
+    pub pid: Option<u32>,
+    pub title: Option<String>,
+    pub focused: bool,
+    pub fullscreen: bool,
+    pub backend: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Status {
     pub ok: bool,
@@ -56,6 +89,8 @@ pub struct Capabilities {
     pub output_focus: bool,
     pub output_events: bool,
     pub focus_events: bool,
+    pub application_catalog: bool,
+    pub application_runtime: bool,
     pub wallpaper_runtime: bool,
     pub service_runtime: bool,
 }
