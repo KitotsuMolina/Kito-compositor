@@ -16,10 +16,16 @@ cargo check --workspace
 cargo test --workspace
 cargo run -p kitsune-compositor-cli -- outputs --contract-v1
 cargo run -p kitsune-compositor-cli -- watch outputs --json-lines --once
+cargo run -p kitsune-compositor-cli -- appearance capabilities --contract-v1
+cargo run -p kitsune-compositor-cli -- appearance preview --image /ruta/wallpaper.png --contract-v1
+cargo run -p kitsune-compositor-cli -- appearance apply --image /ruta/wallpaper.png --dry-run --contract-v1
+cargo run -p kitsune-compositor-cli -- active-media list --contract-v1
+cargo run -p kitsune-compositor-cli -- appearance apply --output DP-1 --dry-run --contract-v1
+cargo run -p kitsune-compositor-cli -- appearance policy show --contract-v1
 ```
 
 El workspace produce el binario `kitsune-compositor`. El crate `backend` se puede probar con runners falsos y no necesita una sesion grafica real para validar normalizacion y seleccion de adapters.
 
 ## Estado de migracion
 
-El contrato read-only y los adapters Hyprland/Niri ya estan separados en el nuevo workspace. `watch outputs` y `watch focus` ofrecen JSON Lines mediante snapshots portables. `wallpaper runtime` aplica y controla `awww/swww` mediante argumentos exactos. El contrato de servicios materializa unidades `systemd --user` desde descriptores tipados y mantiene un registro propio con eliminacion simetrica. Los descriptores de automatizacion admiten un mapa `environment` portable que el adapter traduce de forma segura al gestor de servicios. `automation plan-batch/apply-batch` valida y materializa multiples intenciones con rollback conjunto; la activacion permanece explicita. Las capacidades se anuncian dinamicamente segun los adapters disponibles.
+El contrato read-only y los adapters Hyprland/Niri ya estan separados en el nuevo workspace. `watch outputs` y `watch focus` ofrecen JSON Lines mediante snapshots portables. `wallpaper runtime` aplica y controla `awww/swww` mediante argumentos exactos y publica automaticamente el wallpaper estatico activo por output. Kilivepaper publica el video y thumbnail representativo mediante el mismo registro `active-media`. `appearance apply --output` resuelve esa fuente sin leer estados privados de los productos. `appearance preview` extrae en Rust una paleta normalizada y cacheada sin depender de Node, ImageMagick ni el antiguo watcher de Kitsune. Detecta Caelestia, GNOME, KDE, Hyprland y XDG Portal. El proveedor Caelestia admite aplicacion y restauracion opt-in con `--confirm`, estado XDG, rollback y proteccion frente a cambios posteriores del usuario; los demas proveedores mutables siguen pendientes. El contrato de servicios materializa unidades `systemd --user` desde descriptores tipados y mantiene un registro propio con eliminacion simetrica. Los descriptores de automatizacion admiten un mapa `environment` portable que el adapter traduce de forma segura al gestor de servicios. `automation plan-batch/apply-batch` valida y materializa multiples intenciones con rollback conjunto; la activacion permanece explicita. Las capacidades se anuncian dinamicamente segun los adapters disponibles.

@@ -1,3 +1,5 @@
+mod active_media;
+mod appearance;
 mod applications;
 mod automation;
 mod events;
@@ -9,6 +11,13 @@ mod service;
 mod unit_manager;
 mod wallpaper;
 
+pub use active_media::{ActiveMediaKind, ActiveMediaRecord, ActiveMediaStore};
+pub use appearance::{
+    AppearanceApplyResult, AppearanceCapabilities, AppearanceCurrent, AppearanceEngine,
+    AppearanceMode, AppearanceOperation, AppearancePlan, AppearancePolicy, AppearancePreview,
+    AppearanceRestoreResult, AppearanceState, CaelestiaSnapshot, PaletteCandidate,
+    WallpaperPalette,
+};
 pub use applications::{ApplicationCatalog, application_matches};
 pub use automation::{
     AutomationBatchDescriptor, AutomationDescriptor, AutomationKind, AutomationPlan,

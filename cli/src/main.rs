@@ -1,7 +1,8 @@
 use kitsune_compositor_backend::{
-    AutomationBatchDescriptor, AutomationDescriptor, SystemProcessExecutor, WallpaperApplyRequest,
-    WallpaperRuntime, WallpaperTransition, application_matches, control_automation,
-    detect_service_manager, plan_automation, plan_automation_batch, remove_automation,
+    ActiveMediaKind, ActiveMediaStore, AppearanceEngine, AutomationBatchDescriptor,
+    AutomationDescriptor, SystemProcessExecutor, WallpaperApplyRequest, WallpaperRuntime,
+    WallpaperTransition, application_matches, control_automation, detect_service_manager,
+    plan_automation, plan_automation_batch, remove_automation,
 };
 use kitsune_compositor_backend::{CompositorBackend, EventTracker, HostRunner, SystemHostRunner};
 use kitsune_compositor_backend::{UnitDescriptor, UnitManager};
@@ -77,6 +78,17 @@ Commands:\n\
   validate-output <name> [--json] [--contract-v1]\n\
   applications list|running [--json] [--contract-v1]\n\
   applications match --ids <desktop-id,...> [--json] [--contract-v1]\n\
+  active-media list [--json] [--contract-v1]\n\
+  active-media get --output <name> [--json] [--contract-v1]\n\
+  active-media publish --output <name> --owner <id> --kind static|live --source <path> [--representative-image <path>]\n\
+  active-media remove --output <name> --owner <id> [--json] [--contract-v1]\n\
+  appearance capabilities [--json] [--contract-v1]\n\
+  appearance preview (--image <absolute-path> | --output <name>) [--no-cache] [--json] [--contract-v1]\n\
+  appearance current [--json] [--contract-v1]\n\
+  appearance policy show|disable [--json] [--contract-v1]\n\
+  appearance policy enable --output <name> --confirm [--json] [--contract-v1]\n\
+  appearance apply (--image <absolute-path> | --output <name>) [--dry-run | --confirm] [--json] [--contract-v1]\n\
+  appearance restore [--dry-run | --confirm] [--json] [--contract-v1]\n\
   watch outputs|focus [--json-lines] [--contract-v1] [--poll-ms <n>] [--once]\n\
   wallpaper status --namespace <name> [--json] [--contract-v1]\n\
   wallpaper start|stop|serve --namespace <name> [--json] [--contract-v1]\n\
@@ -202,6 +214,8 @@ fn dispatch(args: &[String], json: bool, contract: bool) -> Result<(), String> {
         }
         Some("watch") => run_watch(args, &backend)?,
         Some("applications") => run_applications(args, &backend, json, contract)?,
+        Some("active-media") => run_active_media(args, &backend, json, contract)?,
+        Some("appearance") => run_appearance(args, json, contract)?,
         Some("wallpaper") => run_wallpaper(args, &backend, json, contract)?,
         Some("automation") => run_automation(args, json, contract)?,
         Some("service") => run_service(args, json, contract)?,
@@ -272,6 +286,303 @@ fn dispatch(args: &[String], json: bool, contract: bool) -> Result<(), String> {
         }
         Some("config") => return Err("invalid config command (use: config show)".into()),
         Some(other) => return Err(format!("unknown command: {other}")),
+    }
+    Ok(())
+}
+
+fn run_appearance(args: &[String], json: bool, contract: bool) -> Result<(), String> {
+    let action = args.get(2).map(String::as_str).ok_or_else(|| {
+        "missing appearance action (capabilities|preview|current|apply|restore)".to_string()
+    })?;
+    let engine = AppearanceEngine::new(SystemHostRunner);
+    match action {
+        "capabilities" => {
+            let capabilities = engine.capabilities();
+            if json {
+                emit_json("appearance capabilities", capabilities, contract);
+            } else {
+                println!("backend: {}", capabilities.backend);
+                println!("mode: {:?}", capabilities.mode);
+                println!("palette_supported: {}", capabilities.palette_supported);
+                println!("preview_supported: {}", capabilities.preview_supported);
+                println!("apply_supported: {}", capabilities.apply_supported);
+                println!("reason: {}", capabilities.reason);
+            }
+        }
+        "preview" => {
+            let image = option_value(args, "--image");
+            let output = option_value(args, "--output");
+            if image.is_some() == output.is_some() {
+                return Err(
+                    "appearance preview requires exactly one of --image or --output".into(),
+                );
+            }
+            let use_cache = !args.iter().any(|arg| arg == "--no-cache");
+            let preview = if let Some(image) = image {
+                let image = PathBuf::from(image);
+                if !image.is_absolute() || !image.is_file() {
+                    return Err("appearance image must be an existing absolute file".into());
+                }
+                engine.preview(&image, use_cache)?
+            } else {
+                let output = output.expect("validated output option");
+                let backend = CompositorBackend::new(SystemHostRunner);
+                let (_, exists) = backend.validate_output(output)?;
+                if !exists {
+                    return Err(format!("output not found: {output}"));
+                }
+                engine.preview_for_output(output, use_cache)?
+            };
+            if json {
+                emit_json("appearance preview", preview, contract);
+            } else {
+                println!("image: {}", preview.image.display());
+                println!("provider: {}", preview.provider.backend);
+                println!("dominant: {}", preview.palette.dominant);
+                println!("vibrant: {}", preview.palette.vibrant);
+                println!("accent_light: {}", preview.palette.accent_light);
+                println!("accent_mid: {}", preview.palette.accent_mid);
+                println!("accent_dark: {}", preview.palette.accent_dark);
+                println!("foreground: {}", preview.palette.foreground);
+            }
+        }
+        "current" => {
+            let current = engine.current();
+            if json {
+                emit_json("appearance current", current, contract);
+            } else {
+                println!("active: {}", current.active);
+                println!("backend: {}", current.provider.backend);
+                println!("reason: {}", current.reason);
+            }
+        }
+        "policy" => {
+            let policy_action = args.get(3).map(String::as_str).ok_or_else(|| {
+                "missing appearance policy action (show|enable|disable)".to_string()
+            })?;
+            match policy_action {
+                "show" => {
+                    let policy = engine.policy()?;
+                    if json {
+                        emit_json("appearance policy show", policy, contract);
+                    } else {
+                        println!("enabled: {}", policy.enabled);
+                        println!(
+                            "source_output: {}",
+                            policy.source_output.as_deref().unwrap_or("-")
+                        );
+                        println!("automatic_apply: {}", policy.automatic_apply);
+                    }
+                }
+                "enable" => {
+                    let output = required_option(args, "--output")?;
+                    let backend = CompositorBackend::new(SystemHostRunner);
+                    let (_, exists) = backend.validate_output(output)?;
+                    if !exists {
+                        return Err(format!("output not found: {output}"));
+                    }
+                    engine.plan_apply_for_output(output)?;
+                    let policy = engine
+                        .enable_automatic(output, args.iter().any(|arg| arg == "--confirm"))?;
+                    let applied =
+                        match engine.sync_automatic_for_output(&SystemProcessExecutor, output) {
+                            Ok(applied) => applied,
+                            Err(error) => {
+                                let _ = engine.disable_automatic();
+                                return Err(format!(
+                                    "appearance policy initial synchronization failed: {error}"
+                                ));
+                            }
+                        };
+                    if json {
+                        emit_json(
+                            "appearance policy enable",
+                            serde_json::json!({"policy": policy, "initial_apply": applied}),
+                            contract,
+                        );
+                    } else {
+                        println!("enabled: true");
+                        println!("source_output: {output}");
+                    }
+                }
+                "disable" => {
+                    let policy = engine.disable_automatic()?;
+                    if json {
+                        emit_json("appearance policy disable", policy, contract);
+                    } else {
+                        println!("enabled: false");
+                    }
+                }
+                _ => {
+                    return Err(
+                        "invalid appearance policy action (use: show, enable or disable)".into(),
+                    );
+                }
+            }
+        }
+        "apply" => {
+            let image = option_value(args, "--image");
+            let output = option_value(args, "--output");
+            if image.is_some() == output.is_some() {
+                return Err("appearance apply requires exactly one of --image or --output".into());
+            }
+            let dry_run = args.iter().any(|arg| arg == "--dry-run");
+            let confirmed = args.iter().any(|arg| arg == "--confirm");
+            let result = if let Some(image) = image {
+                let image = PathBuf::from(image);
+                if !image.is_absolute() || !image.is_file() {
+                    return Err("appearance image must be an existing absolute file".into());
+                }
+                engine.apply(&SystemProcessExecutor, &image, dry_run, confirmed)?
+            } else {
+                let output = output.expect("validated output option");
+                let backend = CompositorBackend::new(SystemHostRunner);
+                let (_, exists) = backend.validate_output(output)?;
+                if !exists {
+                    return Err(format!("output not found: {output}"));
+                }
+                engine.apply_for_output(&SystemProcessExecutor, output, dry_run, confirmed)?
+            };
+            if json {
+                emit_json("appearance apply", result, contract);
+            } else if result.dry_run {
+                println!("dry_run: true");
+                for operation in result.plan.operations {
+                    println!("{} {}", operation.binary, operation.args.join(" "));
+                }
+            } else {
+                println!("applied: {}", result.applied);
+                println!("image: {}", result.plan.image.display());
+                println!("backend: {}", result.plan.provider.backend);
+            }
+        }
+        "restore" => {
+            let result = engine.restore(
+                &SystemProcessExecutor,
+                args.iter().any(|arg| arg == "--dry-run"),
+                args.iter().any(|arg| arg == "--confirm"),
+            )?;
+            if json {
+                emit_json("appearance restore", result, contract);
+            } else if result.dry_run {
+                println!("dry_run: true");
+                for operation in result.operations {
+                    println!("{} {}", operation.binary, operation.args.join(" "));
+                }
+            } else {
+                println!("restored: {}", result.restored);
+                println!("backend: {}", result.provider.backend);
+            }
+        }
+        _ => {
+            return Err(
+                "invalid appearance action (use: capabilities, preview, current, apply or restore)"
+                    .into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn run_active_media<R: HostRunner>(
+    args: &[String],
+    backend: &CompositorBackend<R>,
+    json: bool,
+    contract: bool,
+) -> Result<(), String> {
+    let action = args
+        .get(2)
+        .map(String::as_str)
+        .ok_or_else(|| "missing active media action (list|get|publish|remove)".to_string())?;
+    let store = ActiveMediaStore::from_environment();
+    match action {
+        "list" => {
+            let records = store.list()?;
+            if json {
+                emit_json("active-media list", records, contract);
+            } else {
+                for record in records {
+                    println!(
+                        "{} {} {:?} {}",
+                        record.output,
+                        record.owner,
+                        record.media_type,
+                        record.representative_image.display()
+                    );
+                }
+            }
+        }
+        "get" => {
+            let output = required_option(args, "--output")?;
+            let record = store
+                .get(output)?
+                .ok_or_else(|| format!("no active media registered for output: {output}"))?;
+            if json {
+                emit_json("active-media get", record, contract);
+            } else {
+                println!("output: {}", record.output);
+                println!("owner: {}", record.owner);
+                println!("type: {:?}", record.media_type);
+                println!("source: {}", record.source.display());
+                println!(
+                    "representative_image: {}",
+                    record.representative_image.display()
+                );
+            }
+        }
+        "publish" => {
+            let output = required_option(args, "--output")?;
+            let (_, exists) = backend.validate_output(output)?;
+            if !exists {
+                return Err(format!("output not found: {output}"));
+            }
+            let owner = required_option(args, "--owner")?;
+            let kind = ActiveMediaKind::parse(required_option(args, "--kind")?)?;
+            let source = PathBuf::from(required_option(args, "--source")?);
+            let representative = option_value(args, "--representative-image")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| source.clone());
+            if kind == ActiveMediaKind::Live
+                && option_value(args, "--representative-image").is_none()
+            {
+                return Err("live active media requires --representative-image".into());
+            }
+            let record = store.publish(output, owner, kind, &source, &representative)?;
+            let (appearance_sync, appearance_warning) = automatic_appearance_sync(output);
+            if json {
+                emit_json(
+                    "active-media publish",
+                    serde_json::json!({
+                        "record": record,
+                        "appearance_sync": appearance_sync,
+                        "appearance_warning": appearance_warning
+                    }),
+                    contract,
+                );
+            } else {
+                println!("published: {}", record.output);
+                if let Some(warning) = appearance_warning {
+                    eprintln!("warning: automatic appearance sync failed: {warning}");
+                }
+            }
+        }
+        "remove" => {
+            let output = required_option(args, "--output")?;
+            let owner = required_option(args, "--owner")?;
+            let removed = store.remove(output, owner)?;
+            if json {
+                emit_json(
+                    "active-media remove",
+                    serde_json::json!({"output": output, "owner": owner, "removed": removed}),
+                    contract,
+                );
+            } else {
+                println!("removed: {removed}");
+            }
+        }
+        _ => {
+            return Err("invalid active media action (use: list, get, publish or remove)".into());
+        }
     }
     Ok(())
 }
@@ -615,18 +926,44 @@ fn run_wallpaper<R: HostRunner>(
                 image: PathBuf::from(image),
                 transition,
             })?;
+            let registration = ActiveMediaStore::from_environment().publish(
+                output,
+                namespace,
+                ActiveMediaKind::Static,
+                PathBuf::from(image).as_path(),
+                PathBuf::from(image).as_path(),
+            );
+            let (active_media, active_media_warning) = match registration {
+                Ok(record) => (Some(record), None),
+                Err(error) => (None, Some(error)),
+            };
+            let (appearance_sync, appearance_warning) = if active_media.is_some() {
+                automatic_appearance_sync(output)
+            } else {
+                (None, None)
+            };
             if json {
                 emit_json(
                     "wallpaper apply",
                     serde_json::json!({
                         "runtime": status,
                         "output": output,
-                        "image": image
+                        "image": image,
+                        "active_media": active_media,
+                        "active_media_warning": active_media_warning,
+                        "appearance_sync": appearance_sync,
+                        "appearance_warning": appearance_warning
                     }),
                     contract,
                 );
             } else {
                 println!("applied output={output} image={image}");
+                if let Some(warning) = active_media_warning {
+                    eprintln!("warning: active media was not registered: {warning}");
+                }
+                if let Some(warning) = appearance_warning {
+                    eprintln!("warning: automatic appearance sync failed: {warning}");
+                }
             }
         }
         _ => return Err("wallpaper action must be status, start, serve, stop or apply".into()),
@@ -639,6 +976,20 @@ fn emit_wallpaper_result<T: Serialize>(command: &str, data: T, json: bool, contr
         emit_json(command, data, contract);
     } else {
         print_json(&data);
+    }
+}
+
+fn automatic_appearance_sync(
+    output: &str,
+) -> (
+    Option<kitsune_compositor_backend::AppearanceApplyResult>,
+    Option<String>,
+) {
+    match AppearanceEngine::new(SystemHostRunner)
+        .sync_automatic_for_output(&SystemProcessExecutor, output)
+    {
+        Ok(result) => (result, None),
+        Err(error) => (None, Some(error)),
     }
 }
 
@@ -782,6 +1133,22 @@ fn classify(error: &str) -> (&'static str, i32, Option<String>) {
         || error.starts_with("missing watch target")
         || error.starts_with("missing applications action")
         || error.starts_with("invalid applications action")
+        || error.starts_with("missing active media action")
+        || error.starts_with("invalid active media action")
+        || error.starts_with("invalid active media")
+        || error.starts_with("active media kind")
+        || error.starts_with("active media source")
+        || error.starts_with("representative image")
+        || error.starts_with("live active media")
+        || error.starts_with("missing appearance action")
+        || error.starts_with("invalid appearance action")
+        || error.starts_with("missing appearance policy action")
+        || error.starts_with("invalid appearance policy action")
+        || error.starts_with("appearance policy output")
+        || error.starts_with("appearance image")
+        || error.starts_with("appearance apply requires")
+        || error.starts_with("appearance preview requires")
+        || error.contains("requires --confirm")
         || error.starts_with("--ids requires")
         || error.starts_with("watch target")
         || error.starts_with("--poll-ms")
@@ -822,16 +1189,24 @@ fn classify(error: &str) -> (&'static str, i32, Option<String>) {
     if error.contains("no supported wallpaper runtime") {
         return ("DEPENDENCY_MISSING", 4, None);
     }
+    if error.contains("caelestia is not installed") {
+        return ("DEPENDENCY_MISSING", 4, None);
+    }
     if error.contains("systemctl is not installed") {
         return ("DEPENDENCY_MISSING", 4, None);
     }
-    if error.starts_with("service id not found") {
+    if error.starts_with("service id not found")
+        || error.starts_with("no appearance state to restore")
+        || error.starts_with("no active media registered")
+    {
         return ("RESOURCE_NOT_FOUND", 3, None);
     }
     if error.starts_with("service id already owns")
         || error.starts_with("unit is already registered")
         || error.starts_with("timer target is not registered")
         || error.starts_with("unit is required by registered timer")
+        || error.starts_with("appearance state conflict")
+        || error.starts_with("active media ownership conflict")
     {
         return ("STATE_CONFLICT", 6, None);
     }
@@ -843,6 +1218,8 @@ fn classify(error: &str) -> (&'static str, i32, Option<String>) {
         || error.starts_with("failed to remove unit file")
         || error.starts_with("unsupported service registry schema")
         || error.starts_with("registered unit path")
+        || error.contains("appearance state")
+        || error.contains("active media state")
     {
         return ("IO_ERROR", 7, None);
     }

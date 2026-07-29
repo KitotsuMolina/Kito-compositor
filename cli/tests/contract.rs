@@ -1,3 +1,4 @@
+use image::{ImageBuffer, Rgb};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -56,6 +57,94 @@ fn fake_systemctl(root: &Path, log: &Path) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+fn fake_command(root: &Path, name: &str) {
+    let path = root.join(name);
+    fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+fn fake_caelestia(root: &Path, log: &Path, original_wallpaper: &Path) {
+    let name = root.join("caelestia-name");
+    let flavour = root.join("caelestia-flavour");
+    let mode = root.join("caelestia-mode");
+    let variant = root.join("caelestia-variant");
+    let wallpaper = root.join("caelestia-wallpaper");
+    fs::write(&name, "shadotheme").unwrap();
+    fs::write(&flavour, "default").unwrap();
+    fs::write(&mode, "dark").unwrap();
+    fs::write(&variant, "tonalspot").unwrap();
+    fs::write(&wallpaper, original_wallpaper.to_string_lossy().as_bytes()).unwrap();
+
+    let script = format!(
+        r#"#!/bin/sh
+name='{name}'
+flavour='{flavour}'
+mode='{mode}'
+variant='{variant}'
+wallpaper='{wallpaper}'
+log='{log}'
+
+if [ "$1" = "wallpaper" ] && [ "$#" -eq 1 ]; then
+    if [ -s "$wallpaper" ]; then /bin/cat "$wallpaper"; else echo "No wallpaper set"; fi
+    exit 0
+fi
+if [ "$1" = "wallpaper" ] && [ "$2" = "--file" ]; then
+    printf '%s\n' "$*" >> "$log"
+    printf '%s' "$3" > "$wallpaper"
+    exit 0
+fi
+if [ "$1" = "scheme" ] && [ "$2" = "get" ]; then
+    case "$3" in
+        --name) /bin/cat "$name" ;;
+        --flavour) /bin/cat "$flavour" ;;
+        --mode) /bin/cat "$mode" ;;
+        --variant) /bin/cat "$variant" ;;
+        *) exit 2 ;;
+    esac
+    exit 0
+fi
+if [ "$1" = "scheme" ] && [ "$2" = "set" ]; then
+    printf '%s\n' "$*" >> "$log"
+    shift 2
+    while [ "$#" -gt 1 ]; do
+        case "$1" in
+            --name) printf '%s' "$2" > "$name" ;;
+            --flavour) printf '%s' "$2" > "$flavour" ;;
+            --mode) printf '%s' "$2" > "$mode" ;;
+            --variant) printf '%s' "$2" > "$variant" ;;
+        esac
+        shift 2
+    done
+    exit 0
+fi
+exit 2
+"#,
+        name = name.display(),
+        flavour = flavour.display(),
+        mode = mode.display(),
+        variant = variant.display(),
+        wallpaper = wallpaper.display(),
+        log = log.display(),
+    );
+    let path = root.join("caelestia");
+    fs::write(&path, script).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+fn test_image(path: &Path) {
+    ImageBuffer::from_fn(48, 32, |x, _| {
+        if x < 32 {
+            Rgb([32_u8, 140, 230])
+        } else {
+            Rgb([225_u8, 60, 145])
+        }
+    })
+    .save(path)
+    .unwrap();
+}
+
 #[test]
 fn outputs_use_the_v1_envelope_and_normalized_model() {
     let root = temp_root();
@@ -88,6 +177,443 @@ fn invalid_commands_return_the_contract_error_code() {
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["ok"], false);
     assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+}
+
+#[test]
+fn appearance_capabilities_detect_caelestia_without_applying_changes() {
+    let root = temp_root();
+    fs::create_dir_all(&root).unwrap();
+    fake_command(&root, "caelestia");
+    fake_command(&root, "hyprctl");
+    let output = Command::new(env!("CARGO_BIN_EXE_kitsune-compositor"))
+        .args(["appearance", "capabilities", "--contract-v1"])
+        .env("PATH", &root)
+        .env("XDG_CURRENT_DESKTOP", "Hyprland")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["command"], "appearance capabilities");
+    assert_eq!(value["data"]["backend"], "caelestia");
+    assert_eq!(value["data"]["mode"], "native_palette");
+    assert_eq!(value["data"]["palette_supported"], true);
+    assert_eq!(value["data"]["preview_supported"], true);
+    assert_eq!(value["data"]["apply_supported"], true);
+    assert_eq!(value["data"]["restore_supported"], true);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn appearance_apply_dry_run_never_invokes_caelestia() {
+    let root = temp_root();
+    fs::create_dir_all(&root).unwrap();
+    let image = root.join("wallpaper.png");
+    let original = root.join("original.png");
+    let log = root.join("caelestia.log");
+    let state = root.join("appearance.json");
+    test_image(&image);
+    test_image(&original);
+    fake_caelestia(&root, &log, &original);
+    fake_command(&root, "hyprctl");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kitsune-compositor"))
+        .args([
+            "appearance",
+            "apply",
+            "--image",
+            image.to_str().unwrap(),
+            "--dry-run",
+            "--contract-v1",
+        ])
+        .env("HOME", &root)
+        .env("PATH", &root)
+        .env("XDG_CURRENT_DESKTOP", "Hyprland")
+        .env("KITSUNE_COMPOSITOR_PALETTE_CACHE", root.join("cache"))
+        .env("KITSUNE_COMPOSITOR_APPEARANCE_STATE", &state)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["command"], "appearance apply");
+    assert_eq!(value["data"]["dry_run"], true);
+    assert_eq!(value["data"]["applied"], false);
+    assert_eq!(
+        value["data"]["plan"]["operations"][0]["args"][0],
+        "wallpaper"
+    );
+    assert!(!log.exists());
+    assert!(!state.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn active_media_output_resolves_the_registered_representative_image() {
+    let root = temp_root();
+    fs::create_dir_all(&root).unwrap();
+    let image = root.join("wallpaper.png");
+    let second_image = root.join("wallpaper-second.png");
+    let original = root.join("original.png");
+    let log = root.join("caelestia.log");
+    let media_state = root.join("active-media.json");
+    let appearance_state = root.join("appearance.json");
+    let policy_state = root.join("appearance-policy.json");
+    test_image(&image);
+    test_image(&second_image);
+    test_image(&original);
+    fake_caelestia(&root, &log, &original);
+    fake_hyprctl(&root);
+
+    let publish = Command::new(env!("CARGO_BIN_EXE_kitsune-compositor"))
+        .args([
+            "active-media",
+            "publish",
+            "--output",
+            "DP-1",
+            "--owner",
+            "kitowall",
+            "--kind",
+            "static",
+            "--source",
+            image.to_str().unwrap(),
+            "--contract-v1",
+        ])
+        .env("PATH", &root)
+        .env("HYPRLAND_INSTANCE_SIGNATURE", "test")
+        .env("KITSUNE_COMPOSITOR_ACTIVE_MEDIA_STATE", &media_state)
+        .env("KITSUNE_COMPOSITOR_APPEARANCE_POLICY", &policy_state)
+        .output()
+        .unwrap();
+    assert!(publish.status.success());
+
+    let preview = Command::new(env!("CARGO_BIN_EXE_kitsune-compositor"))
+        .args(["appearance", "preview", "--output", "DP-1", "--contract-v1"])
+        .env("HOME", &root)
+        .env("PATH", &root)
+        .env("XDG_CURRENT_DESKTOP", "Hyprland")
+        .env("KITSUNE_COMPOSITOR_PALETTE_CACHE", root.join("cache"))
+        .env("KITSUNE_COMPOSITOR_ACTIVE_MEDIA_STATE", &media_state)
+        .env("KITSUNE_COMPOSITOR_APPEARANCE_POLICY", &policy_state)
+        .output()
+        .unwrap();
+    assert!(preview.status.success());
+    let preview: Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(preview["data"]["source_output"], "DP-1");
+    assert_eq!(
+        preview["data"]["image"],
+        image.canonicalize().unwrap().to_string_lossy().as_ref()
+    );
+
+    let apply = Command::new(env!("CARGO_BIN_EXE_kitsune-compositor"))
+        .args([
+            "appearance",
+            "apply",
+            "--output",
+            "DP-1",
+            "--dry-run",
+            "--contract-v1",
+        ])
+        .env("HOME", &root)
+        .env("PATH", &root)
+        .env("XDG_CURRENT_DESKTOP", "Hyprland")
+        .env("KITSUNE_COMPOSITOR_PALETTE_CACHE", root.join("cache"))
+        .env("KITSUNE_COMPOSITOR_ACTIVE_MEDIA_STATE", &media_state)
+        .env("KITSUNE_COMPOSITOR_APPEARANCE_POLICY", &policy_state)
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let value: Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(value["data"]["plan"]["source_output"], "DP-1");
+    assert_eq!(
+        value["data"]["plan"]["image"],
+        image.canonicalize().unwrap().to_string_lossy().as_ref()
+    );
+    assert!(!log.exists());
+
+    let enable = Command::new(env!("CARGO_BIN_EXE_kitsune-compositor"))
+        .args([
+            "appearance",
+            "policy",
+            "enable",
+            "--output",
+            "DP-1",
+            "--confirm",
+            "--contract-v1",
+        ])
+        .env("HOME", &root)
+        .env("PATH", &root)
+        .env("XDG_CURRENT_DESKTOP", "Hyprland")
+        .env("KITSUNE_COMPOSITOR_PALETTE_CACHE", root.join("cache"))
+        .env("KITSUNE_COMPOSITOR_ACTIVE_MEDIA_STATE", &media_state)
+        .env("KITSUNE_COMPOSITOR_APPEARANCE_STATE", &appearance_state)
+        .env("KITSUNE_COMPOSITOR_APPEARANCE_POLICY", &policy_state)
+        .output()
+        .unwrap();
+    assert!(
+        enable.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&enable.stdout),
+        String::from_utf8_lossy(&enable.stderr)
+    );
+    let enabled: Value = serde_json::from_slice(&enable.stdout).unwrap();
+    assert_eq!(enabled["data"]["policy"]["source_output"], "DP-1");
+    assert_eq!(enabled["data"]["initial_apply"]["applied"], true);
+    fs::write(&log, "").unwrap();
+
+    let rotate = Command::new(env!("CARGO_BIN_EXE_kitsune-compositor"))
+        .args([
+            "active-media",
+            "publish",
+            "--output",
+            "DP-1",
+            "--owner",
+            "kitowall",
+            "--kind",
+            "static",
+            "--source",
+            second_image.to_str().unwrap(),
+            "--contract-v1",
+        ])
+        .env("HOME", &root)
+        .env("PATH", &root)
+        .env("XDG_CURRENT_DESKTOP", "Hyprland")
+        .env("HYPRLAND_INSTANCE_SIGNATURE", "test")
+        .env("KITSUNE_COMPOSITOR_PALETTE_CACHE", root.join("cache"))
+        .env("KITSUNE_COMPOSITOR_ACTIVE_MEDIA_STATE", &media_state)
+        .env("KITSUNE_COMPOSITOR_APPEARANCE_STATE", &appearance_state)
+        .env("KITSUNE_COMPOSITOR_APPEARANCE_POLICY", &policy_state)
+        .output()
+        .unwrap();
+    assert!(
+        rotate.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&rotate.stdout),
+        String::from_utf8_lossy(&rotate.stderr)
+    );
+    let rotated: Value = serde_json::from_slice(&rotate.stdout).unwrap();
+    assert_eq!(rotated["data"]["appearance_sync"]["applied"], true);
+    assert_eq!(
+        fs::read_to_string(root.join("caelestia-wallpaper")).unwrap(),
+        second_image.to_string_lossy()
+    );
+
+    fs::write(&log, "").unwrap();
+    let repeated = Command::new(env!("CARGO_BIN_EXE_kitsune-compositor"))
+        .args([
+            "active-media",
+            "publish",
+            "--output",
+            "DP-1",
+            "--owner",
+            "kitowall",
+            "--kind",
+            "static",
+            "--source",
+            second_image.to_str().unwrap(),
+            "--contract-v1",
+        ])
+        .env("HOME", &root)
+        .env("PATH", &root)
+        .env("XDG_CURRENT_DESKTOP", "Hyprland")
+        .env("HYPRLAND_INSTANCE_SIGNATURE", "test")
+        .env("KITSUNE_COMPOSITOR_PALETTE_CACHE", root.join("cache"))
+        .env("KITSUNE_COMPOSITOR_ACTIVE_MEDIA_STATE", &media_state)
+        .env("KITSUNE_COMPOSITOR_APPEARANCE_STATE", &appearance_state)
+        .env("KITSUNE_COMPOSITOR_APPEARANCE_POLICY", &policy_state)
+        .output()
+        .unwrap();
+    assert!(repeated.status.success());
+    let repeated: Value = serde_json::from_slice(&repeated.stdout).unwrap();
+    assert!(repeated["data"]["appearance_sync"].is_null());
+    assert_eq!(fs::read_to_string(&log).unwrap(), "");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn appearance_apply_and_restore_preserve_the_original_caelestia_state() {
+    let root = temp_root();
+    fs::create_dir_all(&root).unwrap();
+    let image = root.join("wallpaper.png");
+    let second_image = root.join("wallpaper-second.png");
+    let original = root.join("original.png");
+    let log = root.join("caelestia.log");
+    let state = root.join("appearance.json");
+    test_image(&image);
+    test_image(&second_image);
+    test_image(&original);
+    fake_caelestia(&root, &log, &original);
+    fake_command(&root, "hyprctl");
+
+    let run = |arguments: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_kitsune-compositor"))
+            .args(arguments)
+            .env("HOME", &root)
+            .env("PATH", &root)
+            .env("XDG_CURRENT_DESKTOP", "Hyprland")
+            .env("KITSUNE_COMPOSITOR_PALETTE_CACHE", root.join("cache"))
+            .env("KITSUNE_COMPOSITOR_APPEARANCE_STATE", &state)
+            .output()
+            .unwrap()
+    };
+
+    let apply = run(&[
+        "appearance",
+        "apply",
+        "--image",
+        image.to_str().unwrap(),
+        "--confirm",
+        "--contract-v1",
+    ]);
+    assert!(
+        apply.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr),
+    );
+    let applied: Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(applied["data"]["applied"], true);
+    assert_eq!(
+        applied["data"]["state"]["previous_caelestia"]["name"],
+        "shadotheme"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("caelestia-name")).unwrap(),
+        "dynamic"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("caelestia-wallpaper")).unwrap(),
+        image.to_string_lossy()
+    );
+    assert!(state.exists());
+
+    let second_apply = run(&[
+        "appearance",
+        "apply",
+        "--image",
+        second_image.to_str().unwrap(),
+        "--confirm",
+        "--contract-v1",
+    ]);
+    assert!(
+        second_apply.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&second_apply.stdout),
+        String::from_utf8_lossy(&second_apply.stderr),
+    );
+    let second_applied: Value = serde_json::from_slice(&second_apply.stdout).unwrap();
+    assert_eq!(
+        second_applied["data"]["state"]["previous_caelestia"]["name"],
+        "shadotheme"
+    );
+    assert_eq!(
+        second_applied["data"]["state"]["previous_caelestia"]["wallpaper"],
+        original.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("caelestia-wallpaper")).unwrap(),
+        second_image.to_string_lossy()
+    );
+
+    fs::write(root.join("caelestia-name"), "manual-theme").unwrap();
+    let conflict = run(&["appearance", "restore", "--confirm", "--contract-v1"]);
+    assert_eq!(conflict.status.code(), Some(6));
+    let conflict: Value = serde_json::from_slice(&conflict.stdout).unwrap();
+    assert_eq!(conflict["error"]["code"], "STATE_CONFLICT");
+    assert!(state.exists());
+    fs::write(root.join("caelestia-name"), "dynamic").unwrap();
+
+    let restore = run(&["appearance", "restore", "--confirm", "--contract-v1"]);
+    assert!(
+        restore.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&restore.stdout),
+        String::from_utf8_lossy(&restore.stderr),
+    );
+    let restored: Value = serde_json::from_slice(&restore.stdout).unwrap();
+    assert_eq!(restored["data"]["restored"], true);
+    assert_eq!(
+        fs::read_to_string(root.join("caelestia-name")).unwrap(),
+        "shadotheme"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("caelestia-wallpaper")).unwrap(),
+        original.to_string_lossy()
+    );
+    assert!(!state.exists());
+
+    let commands = fs::read_to_string(log).unwrap();
+    assert!(commands.contains(&format!("wallpaper --file {}", image.display())));
+    assert!(commands.contains(&format!("wallpaper --file {}", second_image.display())));
+    assert!(commands.contains("scheme set --name dynamic"));
+    assert!(commands.contains("scheme set --name shadotheme"));
+    assert!(commands.contains(&format!("wallpaper --file {}", original.display())));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn appearance_preview_returns_a_cached_normalized_palette() {
+    let root = temp_root();
+    let bin = root.join("bin");
+    let cache = root.join("cache");
+    fs::create_dir_all(&bin).unwrap();
+    fake_command(&bin, "hyprctl");
+    let image_path = root.join("wallpaper.png");
+    let image = ImageBuffer::from_fn(80, 40, |x, _| {
+        if x < 60 {
+            Rgb([20_u8, 95, 220])
+        } else {
+            Rgb([240_u8, 65, 155])
+        }
+    });
+    image.save(&image_path).unwrap();
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_kitsune-compositor"))
+            .args([
+                "appearance",
+                "preview",
+                "--image",
+                image_path.to_str().unwrap(),
+                "--contract-v1",
+            ])
+            .env("HOME", &root)
+            .env("PATH", &bin)
+            .env("XDG_CURRENT_DESKTOP", "Hyprland")
+            .env("KITSUNE_COMPOSITOR_PALETTE_CACHE", &cache)
+            .output()
+            .unwrap()
+    };
+    let first = run();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first["command"], "appearance preview");
+    assert_eq!(first["data"]["cache_hit"], false);
+    assert!(
+        first["data"]["palette"]["candidates"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 2
+    );
+    assert_eq!(first["data"]["provider"]["backend"], "hyprland");
+    let second = run();
+    assert!(second.status.success());
+    let second: Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(second["data"]["cache_hit"], true);
+    assert_eq!(first["data"]["palette"], second["data"]["palette"]);
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -155,6 +681,14 @@ fn wallpaper_apply_uses_validated_output_and_exact_awww_command() {
         ])
         .env("PATH", &root)
         .env("HYPRLAND_INSTANCE_SIGNATURE", "test")
+        .env(
+            "KITSUNE_COMPOSITOR_ACTIVE_MEDIA_STATE",
+            root.join("active-media.json"),
+        )
+        .env(
+            "KITSUNE_COMPOSITOR_APPEARANCE_POLICY",
+            root.join("appearance-policy.json"),
+        )
         .env_remove("NIRI_SOCKET")
         .output()
         .unwrap();
@@ -167,6 +701,7 @@ fn wallpaper_apply_uses_validated_output_and_exact_awww_command() {
     assert_eq!(value["command"], "wallpaper apply");
     assert_eq!(value["data"]["runtime"]["backend"], "awww");
     assert_eq!(value["data"]["output"], "DP-1");
+    assert_eq!(value["data"]["active_media"]["owner"], "kitowall");
     let calls = fs::read_to_string(&log).unwrap();
     assert!(calls.contains("query --json --namespace kitowall"));
     assert!(calls.contains("img --namespace kitowall --outputs DP-1"));
