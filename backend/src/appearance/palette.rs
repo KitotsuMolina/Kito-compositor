@@ -1,6 +1,6 @@
 use super::{PaletteCandidate, WallpaperPalette};
 use image::imageops::FilterType;
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -69,7 +69,7 @@ pub fn extract(path: &Path) -> Result<WallpaperPalette, String> {
             }
         })
         .collect::<Vec<_>>();
-    buckets.sort_by(|a, b| b.count.cmp(&a.count));
+    buckets.sort_by_key(|bucket| Reverse(bucket.count));
 
     let dominant = buckets
         .first()
