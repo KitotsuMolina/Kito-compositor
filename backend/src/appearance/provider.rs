@@ -1,5 +1,7 @@
-use super::{AppearanceCapabilities, AppearanceMode};
+use super::{AppearanceAdvisory, AppearanceCapabilities, AppearanceMode};
 use crate::HostRunner;
+use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 pub fn detect<R: HostRunner>(runner: &R) -> AppearanceCapabilities {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP")
@@ -14,7 +16,7 @@ pub fn detect<R: HostRunner>(runner: &R) -> AppearanceCapabilities {
 
 fn detect_for_desktop<R: HostRunner>(runner: &R, desktop: &str) -> AppearanceCapabilities {
     if desktop.contains("hyprland") && runner.command_exists("caelestia") {
-        return capabilities(
+        let mut result = capabilities(
             "caelestia",
             AppearanceMode::NativePalette,
             true,
@@ -23,6 +25,8 @@ fn detect_for_desktop<R: HostRunner>(runner: &R, desktop: &str) -> AppearanceCap
             &["hyprland", "shell", "gtk", "qt", "terminal", "integrations"],
             "Caelestia is available for opt-in full Material palette propagation",
         );
+        result.advisories = caelestia_advisories(runner, &caelestia_cli_config_path());
+        return result;
     }
     if desktop.contains("gnome") && runner.command_exists("gsettings") {
         return capabilities(
@@ -101,7 +105,52 @@ fn capabilities(
         restore_supported,
         scopes: scopes.iter().map(|scope| (*scope).into()).collect(),
         reason: reason.into(),
+        advisories: Vec::new(),
     }
+}
+
+fn caelestia_cli_config_path() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .unwrap_or_else(|| PathBuf::from(".config"))
+        .join("caelestia/cli.json")
+}
+
+fn caelestia_advisories<R: HostRunner>(runner: &R, config_path: &Path) -> Vec<AppearanceAdvisory> {
+    let chromium_detected = [
+        "brave",
+        "chromium",
+        "chromium-browser",
+        "google-chrome-stable",
+    ]
+    .iter()
+    .any(|command| runner.command_exists(command));
+    if !chromium_detected {
+        return Vec::new();
+    }
+    let chromium_enabled = std::fs::read(config_path)
+        .ok()
+        .and_then(|content| serde_json::from_slice::<Value>(&content).ok())
+        .and_then(|config| {
+            config
+                .pointer("/theme/enableChromium")
+                .and_then(Value::as_bool)
+        })
+        .unwrap_or(true);
+    if !chromium_enabled {
+        return Vec::new();
+    }
+    vec![AppearanceAdvisory {
+        code: "caelestia_chromium_refresh_may_hang".into(),
+        severity: "blocking".into(),
+        message: format!(
+            "Caelestia puede quedar esperando al actualizar Brave/Chromium. Edita {} y configura theme.enableChromium en false antes de activar los colores dinamicos.",
+            config_path.display()
+        ),
+        config_path: Some(config_path.to_path_buf()),
+        suggested_json: Some("{\n  \"theme\": {\n    \"enableChromium\": false\n  }\n}".into()),
+    }]
 }
 
 #[cfg(test)]
@@ -138,5 +187,37 @@ mod tests {
         assert_eq!(result.mode, AppearanceMode::NativePalette);
         assert!(result.apply_supported);
         assert!(result.restore_supported);
+    }
+
+    #[test]
+    fn warns_when_chromium_theming_is_implicitly_enabled() {
+        let runner = FakeRunner {
+            commands: ["caelestia", "brave"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        };
+        let path = std::env::temp_dir().join("missing-caelestia-cli.json");
+        let warnings = caelestia_advisories(&runner, &path);
+        assert_eq!(warnings[0].code, "caelestia_chromium_refresh_may_hang");
+        assert_eq!(warnings[0].severity, "blocking");
+    }
+
+    #[test]
+    fn accepts_an_explicitly_disabled_chromium_integration() {
+        let runner = FakeRunner {
+            commands: ["caelestia", "brave"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        };
+        let path = std::env::temp_dir().join(format!(
+            "caelestia-cli-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, r#"{"theme":{"enableChromium":false}}"#).unwrap();
+        assert!(caelestia_advisories(&runner, &path).is_empty());
+        std::fs::remove_file(path).unwrap();
     }
 }

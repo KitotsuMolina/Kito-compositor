@@ -23,6 +23,19 @@ pub struct AppearanceCapabilities {
     pub restore_supported: bool,
     pub scopes: Vec<String>,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub advisories: Vec<AppearanceAdvisory>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppearanceAdvisory {
+    pub code: String,
+    pub severity: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_json: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

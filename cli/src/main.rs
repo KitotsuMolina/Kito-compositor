@@ -307,6 +307,12 @@ fn run_appearance(args: &[String], json: bool, contract: bool) -> Result<(), Str
                 println!("preview_supported: {}", capabilities.preview_supported);
                 println!("apply_supported: {}", capabilities.apply_supported);
                 println!("reason: {}", capabilities.reason);
+                for advisory in capabilities.advisories {
+                    println!("warning[{}]: {}", advisory.code, advisory.message);
+                    if let Some(json) = advisory.suggested_json {
+                        println!("suggested_config: {json}");
+                    }
+                }
             }
         }
         "preview" => {

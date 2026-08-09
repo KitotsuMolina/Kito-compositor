@@ -7,8 +7,8 @@ mod provider;
 mod state;
 
 pub use model::{
-    AppearanceApplyResult, AppearanceCapabilities, AppearanceCurrent, AppearanceMode,
-    AppearanceOperation, AppearancePlan, AppearancePolicy, AppearancePreview,
+    AppearanceAdvisory, AppearanceApplyResult, AppearanceCapabilities, AppearanceCurrent,
+    AppearanceMode, AppearanceOperation, AppearancePlan, AppearancePolicy, AppearancePreview,
     AppearanceRestoreResult, AppearanceState, CaelestiaSnapshot, PaletteCandidate,
     WallpaperPalette,
 };
@@ -94,6 +94,7 @@ impl<R: HostRunner> AppearanceEngine<R> {
         if !policy.post_hook_consent {
             return Err("appearance automatic policy lacks postHook consent".into());
         }
+        self.ensure_compatible()?;
         let _guard = self.state.lock_apply()?;
         let record = self
             .active_media
@@ -256,6 +257,7 @@ impl<R: HostRunner> AppearanceEngine<R> {
                 "appearance apply requires --confirm because Caelestia may execute postHook".into(),
             );
         }
+        self.ensure_compatible()?;
         if !executor.command_exists("caelestia") {
             return Err("caelestia is not installed".into());
         }
@@ -317,6 +319,23 @@ impl<R: HostRunner> AppearanceEngine<R> {
             plan,
             state: Some(state),
         })
+    }
+
+    fn ensure_compatible(&self) -> Result<(), String> {
+        let capabilities = self.capabilities();
+        let Some(advisory) = capabilities
+            .advisories
+            .iter()
+            .find(|advisory| advisory.severity == "blocking")
+        else {
+            return Ok(());
+        };
+        let suggested = advisory
+            .suggested_json
+            .as_deref()
+            .map(|json| format!(" Suggested configuration: {json}"))
+            .unwrap_or_default();
+        Err(format!("{}{suggested}", advisory.message))
     }
 
     pub fn restore<E: ProcessExecutor>(
