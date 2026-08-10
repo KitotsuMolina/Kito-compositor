@@ -5,7 +5,7 @@ use kitsune_compositor_backend::{
     plan_automation, plan_automation_batch, remove_automation,
 };
 use kitsune_compositor_backend::{CompositorBackend, EventTracker, HostRunner, SystemHostRunner};
-use kitsune_compositor_backend::{UnitDescriptor, UnitManager};
+use kitsune_compositor_backend::{SddmManager, UnitDescriptor, UnitManager};
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
@@ -89,6 +89,10 @@ Commands:\n\
   appearance policy enable --output <name> --confirm [--json] [--contract-v1]\n\
   appearance apply (--image <absolute-path> | --output <name>) [--dry-run | --confirm] [--json] [--contract-v1]\n\
   appearance restore [--dry-run | --confirm] [--json] [--contract-v1]\n\
+  display-manager capabilities|status [--json] [--contract-v1]\n\
+  sddm theme plan|apply --descriptor <absolute-json-path> [--media <absolute-path,...>] [--theme-source <absolute-directory>] [--confirm] [--contract-v1]\n\
+  sddm theme restore --confirm [--contract-v1]\n\
+  sddm status [--json] [--contract-v1]\n\
   watch outputs|focus [--json-lines] [--contract-v1] [--poll-ms <n>] [--once]\n\
   wallpaper status --namespace <name> [--json] [--contract-v1]\n\
   wallpaper start|stop|serve --namespace <name> [--json] [--contract-v1]\n\
@@ -216,6 +220,8 @@ fn dispatch(args: &[String], json: bool, contract: bool) -> Result<(), String> {
         Some("applications") => run_applications(args, &backend, json, contract)?,
         Some("active-media") => run_active_media(args, &backend, json, contract)?,
         Some("appearance") => run_appearance(args, json, contract)?,
+        Some("display-manager") => run_display_manager(args, json, contract)?,
+        Some("sddm") => run_sddm(args, json, contract)?,
         Some("wallpaper") => run_wallpaper(args, &backend, json, contract)?,
         Some("automation") => run_automation(args, json, contract)?,
         Some("service") => run_service(args, json, contract)?,
@@ -286,6 +292,103 @@ fn dispatch(args: &[String], json: bool, contract: bool) -> Result<(), String> {
         }
         Some("config") => return Err("invalid config command (use: config show)".into()),
         Some(other) => return Err(format!("unknown command: {other}")),
+    }
+    Ok(())
+}
+
+fn run_display_manager(args: &[String], json: bool, contract: bool) -> Result<(), String> {
+    let manager = SddmManager::from_environment();
+    match args.get(2).map(String::as_str).unwrap_or("status") {
+        "capabilities" => {
+            let data = manager.capabilities();
+            if json {
+                emit_json("display-manager capabilities", data, contract);
+            } else {
+                println!("sddm_installed: {}", data.sddm_installed);
+                println!("greeter_qt6: {}", data.greeter_qt6);
+                println!("video_background: {}", data.video_background);
+            }
+        }
+        "status" => {
+            let data = manager.status()?;
+            if json {
+                emit_json("display-manager status", data, contract);
+            } else {
+                println!("configured: {}", data.configured);
+                println!("descriptor: {}", data.descriptor_path);
+            }
+        }
+        _ => return Err("display-manager action must be capabilities or status".into()),
+    }
+    Ok(())
+}
+
+fn run_sddm(args: &[String], json: bool, contract: bool) -> Result<(), String> {
+    let manager = SddmManager::from_environment();
+    match args.get(2).map(String::as_str).unwrap_or("status") {
+        "status" => {
+            let data = manager.status()?;
+            if json {
+                emit_json("sddm status", data, contract);
+            } else {
+                println!("configured: {}", data.configured);
+                println!("descriptor: {}", data.descriptor_path);
+            }
+        }
+        "theme" => {
+            let action = args.get(3).map(String::as_str).unwrap_or("plan");
+            match action {
+                "plan" => {
+                    let descriptor = PathBuf::from(required_option(args, "--descriptor")?);
+                    let data = manager.plan(&descriptor)?;
+                    if json {
+                        emit_json("sddm theme plan", data, contract);
+                    } else {
+                        println!("preset: {}", data.preset);
+                        println!("mode: {}", data.mode);
+                        for operation in data.operations {
+                            println!("- {operation}");
+                        }
+                    }
+                }
+                "apply" => {
+                    let descriptor = PathBuf::from(required_option(args, "--descriptor")?);
+                    if !args.iter().any(|arg| arg == "--confirm") {
+                        return Err("sddm theme apply requires --confirm".into());
+                    }
+                    let media = option_value(args, "--media")
+                        .map(|value| {
+                            value
+                                .split(',')
+                                .filter(|path| !path.is_empty())
+                                .map(PathBuf::from)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let theme_source = option_value(args, "--theme-source").map(PathBuf::from);
+                    let data = manager.apply(&descriptor, &media, theme_source.as_deref())?;
+                    if json {
+                        emit_json("sddm theme apply", data, contract);
+                    } else {
+                        println!("applied: {}", data.applied);
+                        println!("descriptor: {}", data.descriptor_path);
+                    }
+                }
+                "restore" => {
+                    if !args.iter().any(|arg| arg == "--confirm") {
+                        return Err("sddm theme restore requires --confirm".into());
+                    }
+                    let data = manager.restore()?;
+                    if json {
+                        emit_json("sddm theme restore", data, contract);
+                    } else {
+                        println!("restored: {}", data.restored);
+                    }
+                }
+                _ => return Err("sddm theme action must be plan, apply or restore".into()),
+            }
+        }
+        _ => return Err("sddm action must be status or theme".into()),
     }
     Ok(())
 }

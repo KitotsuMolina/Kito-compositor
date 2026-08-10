@@ -22,7 +22,16 @@ cargo run -p kitsune-compositor-cli -- appearance apply --image /ruta/wallpaper.
 cargo run -p kitsune-compositor-cli -- active-media list --contract-v1
 cargo run -p kitsune-compositor-cli -- appearance apply --output DP-1 --dry-run --contract-v1
 cargo run -p kitsune-compositor-cli -- appearance policy show --contract-v1
+cargo run -p kitsune-compositor-cli -- display-manager capabilities --contract-v1
+cargo run -p kitsune-compositor-cli -- sddm status --contract-v1
+cargo run -p kitsune-compositor-cli -- sddm theme plan --descriptor /ruta/absoluta/config.json --contract-v1
 ```
+
+El dominio SDDM se implementa únicamente en este compositor refactorizado.
+Valida descriptores, materializa medios, instala solo el tema administrado,
+activa `/etc/sddm.conf.d/90-kisddm.conf` y conserva un backup simétrico. Las
+operaciones mutables requieren `--confirm`; KiSDDM usa `--authorize` para elevar
+exclusivamente esta llamada mediante Polkit.
 
 El workspace produce el binario `kitsune-compositor`. El crate `backend` se puede probar con runners falsos y no necesita una sesion grafica real para validar normalizacion y seleccion de adapters.
 

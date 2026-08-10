@@ -7,6 +7,7 @@ mod model;
 mod process;
 mod provider;
 mod runner;
+mod sddm;
 mod service;
 mod unit_manager;
 mod wallpaper;
@@ -31,6 +32,10 @@ pub use model::{
 };
 pub use process::{ProcessExecutor, ProcessOutput, SystemProcessExecutor};
 pub use runner::{HostRunner, SystemHostRunner};
+pub use sddm::{
+    SddmApplyResult, SddmCapabilities, SddmManager, SddmPlan, SddmRestoreResult, SddmStatus,
+    StagedMedia,
+};
 pub use service::CompositorBackend;
 pub use unit_manager::{
     RestartPolicy, UnitDescriptor, UnitManager, UnitPlan, UnitRecord, UnitStatus,
