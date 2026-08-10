@@ -604,10 +604,10 @@ fn battery_status() -> (bool, u8) {
         if kind.trim() != "Battery" {
             continue;
         }
-        if let Ok(percent) = fs::read_to_string(path.join("capacity")) {
-            if let Ok(percent) = percent.trim().parse::<u8>() {
-                return (true, percent.min(100));
-            }
+        if let Ok(percent) = fs::read_to_string(path.join("capacity"))
+            && let Ok(percent) = percent.trim().parse::<u8>()
+        {
+            return (true, percent.min(100));
         }
     }
     (false, 0)
