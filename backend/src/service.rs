@@ -39,7 +39,12 @@ impl<R: HostRunner> CompositorBackend<R> {
             return Err("output name cannot be empty".into());
         }
         let (kind, outputs) = self.outputs()?;
-        Ok((kind, outputs.iter().any(|output| output.name == name)))
+        Ok((
+            kind,
+            outputs
+                .iter()
+                .any(|output| output.name == name && output.active),
+        ))
     }
 
     pub fn installed_applications(&self) -> Vec<InstalledApplication> {

@@ -30,6 +30,58 @@ fn fake_hyprctl(root: &Path) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+#[test]
+fn niri_indexed_modes_and_focus_are_normalized_through_the_cli() {
+    let root = temp_root();
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("niri");
+    fs::write(&path, r#"#!/bin/sh
+case "$3" in
+  outputs) printf '%s\n' '{"eDP-1":{"name":"eDP-1","modes":[{"width":1920,"height":1080,"refresh_rate":144000}],"current_mode":0,"logical":{"scale":1.0}},"DP-1":{"name":"DP-1","modes":[],"current_mode":null,"logical":null}}' ;;
+  focused-output) printf '%s\n' '{"name":"eDP-1"}' ;;
+  *) exit 2 ;;
+esac
+"#).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_kitsune-compositor"))
+        .args(["outputs", "--contract-v1"])
+        .env("PATH", &root)
+        .env("NIRI_SOCKET", "fixture")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let outputs = value["data"]["outputs"].as_array().unwrap();
+    let active = outputs
+        .iter()
+        .find(|output| output["name"] == "eDP-1")
+        .unwrap();
+    assert_eq!(active["width"], 1920);
+    assert_eq!(active["refresh_hz"], 144.0);
+    assert_eq!(active["focused"], true);
+    let inactive = outputs
+        .iter()
+        .find(|output| output["name"] == "DP-1")
+        .unwrap();
+    assert_eq!(inactive["active"], false);
+    let output = Command::new(env!("CARGO_BIN_EXE_kitsune-compositor"))
+        .args(["focused-output", "--contract-v1"])
+        .env("PATH", &root)
+        .env("NIRI_SOCKET", "fixture")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(value["data"].to_string().contains("eDP-1"));
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn fake_awww(root: &Path, log: &Path) {
     let script = format!(
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexit 0\n",

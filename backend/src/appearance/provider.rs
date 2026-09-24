@@ -15,6 +15,26 @@ pub fn detect<R: HostRunner>(runner: &R) -> AppearanceCapabilities {
 }
 
 fn detect_for_desktop<R: HostRunner>(runner: &R, desktop: &str) -> AppearanceCapabilities {
+    // Probe the public IPC: having the executable installed does not mean
+    // this session runs DMS. Never inspect or rewrite shell-owned JSON here.
+    if runner.command_exists("dms")
+        && runner
+            .run_json(
+                "dms",
+                &["ipc", "call", "settings", "get", "currentThemeName"],
+            )
+            .is_ok_and(|value| value.as_str().is_some_and(|name| !name.is_empty()))
+    {
+        return capabilities(
+            "dms",
+            AppearanceMode::ReadOnly,
+            true,
+            false,
+            false,
+            &["shell"],
+            "DMS IPC is available; palette preview is supported. Theme application and restoration are not enabled yet",
+        );
+    }
     if desktop.contains("hyprland") && runner.command_exists("caelestia") {
         let mut result = capabilities(
             "caelestia",
@@ -162,6 +182,51 @@ mod tests {
     #[derive(Default)]
     struct FakeRunner {
         commands: BTreeSet<String>,
+    }
+
+    struct DmsRunner {
+        response: Result<Value, String>,
+    }
+
+    impl HostRunner for DmsRunner {
+        fn command_exists(&self, bin: &str) -> bool {
+            matches!(bin, "dms" | "gdbus")
+        }
+
+        fn run_json(&self, bin: &str, args: &[&str]) -> Result<Value, String> {
+            assert_eq!(bin, "dms");
+            assert_eq!(
+                args,
+                &["ipc", "call", "settings", "get", "currentThemeName"]
+            );
+            self.response.clone()
+        }
+    }
+
+    #[test]
+    fn running_dms_is_detected_without_claiming_mutable_support() {
+        let result = detect_for_desktop(
+            &DmsRunner {
+                response: Ok(serde_json::json!("purple")),
+            },
+            "niri",
+        );
+        assert_eq!(result.backend, "dms");
+        assert!(result.preview_supported);
+        assert!(!result.apply_supported);
+        assert!(!result.restore_supported);
+    }
+
+    #[test]
+    fn installed_but_unavailable_dms_does_not_mask_fallback() {
+        for response in [
+            Err("no IPC".into()),
+            Ok(Value::Null),
+            Ok(serde_json::json!({})),
+        ] {
+            let result = detect_for_desktop(&DmsRunner { response }, "niri");
+            assert_eq!(result.backend, "xdg-portal");
+        }
     }
 
     impl HostRunner for FakeRunner {

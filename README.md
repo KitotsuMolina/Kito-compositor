@@ -62,4 +62,11 @@ git push origin v0.1.0
 
 ## Estado de migracion
 
+Actualizacion 2026-09-24: Niri interpreta modos indexados, frecuencia en milihertz,
+outputs desactivados y consulta el foco mediante `focused-output`. Relaciona
+ventanas con outputs mediante workspaces y tolera ventanas sin `app_id`.
+Apariencia detecta DMS por IPC y anuncia por ahora solo lectura/preview;
+aplicacion y restauracion DMS permanecen pendientes. Estas comprobaciones de
+lectura no certifican todavia la integracion completa del entorno.
+
 El contrato read-only y los adapters Hyprland/Niri ya estan separados en el nuevo workspace. `watch outputs` y `watch focus` ofrecen JSON Lines mediante snapshots portables. `wallpaper runtime` aplica y controla `awww/swww` mediante argumentos exactos y publica automaticamente el wallpaper estatico activo por output. Kilivepaper publica el video y thumbnail representativo mediante el mismo registro `active-media`. `appearance apply --output` resuelve esa fuente sin leer estados privados de los productos. `appearance preview` extrae en Rust una paleta normalizada y cacheada sin depender de Node, ImageMagick ni el antiguo watcher de Kitsune. Detecta Caelestia, GNOME, KDE, Hyprland y XDG Portal. El proveedor Caelestia admite aplicacion y restauracion opt-in con `--confirm`, estado XDG, rollback y proteccion frente a cambios posteriores del usuario; los demas proveedores mutables siguen pendientes. El contrato de servicios materializa unidades `systemd --user` desde descriptores tipados y mantiene un registro propio con eliminacion simetrica. Los descriptores de automatizacion admiten un mapa `environment` portable que el adapter traduce de forma segura al gestor de servicios. `automation plan-batch/apply-batch` valida y materializa multiples intenciones con rollback conjunto; la activacion permanece explicita. Las capacidades se anuncian dinamicamente segun los adapters disponibles.
