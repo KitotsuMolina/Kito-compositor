@@ -138,3 +138,23 @@ kitsune-compositor service remove --id kitowall-next --contract-v1
 ```
 
 Los descriptores fisicos se conservan como API interna y de compatibilidad. Los productos nuevos deben usar `automation`. El compositor mantiene su registro propio; GekkoApp no interviene en la creacion ni control de unidades.
+
+
+## Contexto de sesión y automatizaciones gráficas (2026-09-28)
+
+`kitsune-compositor session context --contract-v1` consulta el target gráfico y
+el entorno del gestor systemd-user mediante systemctl/busctl. Devuelve `ready`,
+`reason` y un mapa `environment` limitado a variables de conexión gráfica
+(WAYLAND_DISPLAY, DISPLAY, XDG_RUNTIME_DIR, XDG_SESSION_TYPE,
+XDG_CURRENT_DESKTOP, NIRI_SOCKET, HYPRLAND_INSTANCE_SIGNATURE y
+DBUS_SESSION_BUS_ADDRESS). No expone el entorno completo ni evalúa shell.
+La sesión requiere Wayland y runtime dir absoluto; otros gestores sin este
+adaptador todavía no están soportados. `ready` no comprueba que cada socket
+responda: el consumidor debe validar la conexión.
+
+Los descriptores de automatización aceptan `session: "graphical"`: el servicio
+usa WantedBy/PartOf=graphical-session.target y After=graphical-session-pre.target.
+Sin ese campo se conserva `user` y default.target. La combinación de sesión
+gráfica y schedule se rechaza. Los servicios existentes no se regeneran hasta
+volver a aplicar el descriptor. Probado por contrato/unit tests y consulta en
+Niri; pendiente logout/login con servicio real habilitado.

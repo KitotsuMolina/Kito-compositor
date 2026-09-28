@@ -74,6 +74,7 @@ Global options:\n\
 Commands:\n\
   detect [--json] [--contract-v1]\n\
   outputs [--json] [--contract-v1]\n\
+  session context [--json] [--contract-v1]\n\
   focused-output [--json] [--contract-v1]\n\
   validate-output <name> [--json] [--contract-v1]\n\
   applications list|running [--json] [--contract-v1]\n\
@@ -223,6 +224,10 @@ fn dispatch(args: &[String], json: bool, contract: bool) -> Result<(), String> {
         Some("display-manager") => run_display_manager(args, json, contract)?,
         Some("sddm") => run_sddm(args, json, contract)?,
         Some("wallpaper") => run_wallpaper(args, &backend, json, contract)?,
+        Some("session") if args.get(2).map(String::as_str) == Some("context") => {
+            let context = kitsune_compositor_backend::graphical_session(&SystemProcessExecutor)?;
+            emit_service_result("session context", context, json, contract);
+        }
         Some("automation") => run_automation(args, json, contract)?,
         Some("service") => run_service(args, json, contract)?,
         Some("status") => {

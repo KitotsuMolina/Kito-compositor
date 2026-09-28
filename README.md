@@ -1,5 +1,7 @@
 # Compositor
 
+Paletas de seis familias con tonos fieles: [contrato y validación](docs/PALETAS_FIELES_V2.md).
+
 Infraestructura compartida que abstrae escritorios, outputs, renderers, servicios y operaciones dependientes de la sesion grafica.
 
 - `cli/`: contrato terminal estable para consumidores y diagnostico.
@@ -70,3 +72,23 @@ aplicacion y restauracion DMS permanecen pendientes. Estas comprobaciones de
 lectura no certifican todavia la integracion completa del entorno.
 
 El contrato read-only y los adapters Hyprland/Niri ya estan separados en el nuevo workspace. `watch outputs` y `watch focus` ofrecen JSON Lines mediante snapshots portables. `wallpaper runtime` aplica y controla `awww/swww` mediante argumentos exactos y publica automaticamente el wallpaper estatico activo por output. Kilivepaper publica el video y thumbnail representativo mediante el mismo registro `active-media`. `appearance apply --output` resuelve esa fuente sin leer estados privados de los productos. `appearance preview` extrae en Rust una paleta normalizada y cacheada sin depender de Node, ImageMagick ni el antiguo watcher de Kitsune. Detecta Caelestia, GNOME, KDE, Hyprland y XDG Portal. El proveedor Caelestia admite aplicacion y restauracion opt-in con `--confirm`, estado XDG, rollback y proteccion frente a cambios posteriores del usuario; los demas proveedores mutables siguen pendientes. El contrato de servicios materializa unidades `systemd --user` desde descriptores tipados y mantiene un registro propio con eliminacion simetrica. Los descriptores de automatizacion admiten un mapa `environment` portable que el adapter traduce de forma segura al gestor de servicios. `automation plan-batch/apply-batch` valida y materializa multiples intenciones con rollback conjunto; la activacion permanece explicita. Las capacidades se anuncian dinamicamente segun los adapters disponibles.
+
+
+## Contexto de sesión y automatizaciones gráficas (2026-09-28)
+
+`kitsune-compositor session context --contract-v1` consulta el target gráfico y
+el entorno del gestor systemd-user mediante systemctl/busctl. Devuelve `ready`,
+`reason` y un mapa `environment` limitado a variables de conexión gráfica
+(WAYLAND_DISPLAY, DISPLAY, XDG_RUNTIME_DIR, XDG_SESSION_TYPE,
+XDG_CURRENT_DESKTOP, NIRI_SOCKET, HYPRLAND_INSTANCE_SIGNATURE y
+DBUS_SESSION_BUS_ADDRESS). No expone el entorno completo ni evalúa shell.
+La sesión requiere Wayland y runtime dir absoluto; otros gestores sin este
+adaptador todavía no están soportados. `ready` no comprueba que cada socket
+responda: el consumidor debe validar la conexión.
+
+Los descriptores de automatización aceptan `session: "graphical"`: el servicio
+usa WantedBy/PartOf=graphical-session.target y After=graphical-session-pre.target.
+Sin ese campo se conserva `user` y default.target. La combinación de sesión
+gráfica y schedule se rechaza. Los servicios existentes no se regeneran hasta
+volver a aplicar el descriptor. Probado por contrato/unit tests y consulta en
+Niri; pendiente logout/login con servicio real habilitado.

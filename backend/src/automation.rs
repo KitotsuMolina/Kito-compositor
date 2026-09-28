@@ -17,6 +17,14 @@ pub struct Schedule {
     pub every_seconds: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionScope {
+    #[default]
+    User,
+    Graphical,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutomationDescriptor {
     pub schema_version: u8,
@@ -30,6 +38,8 @@ pub struct AutomationDescriptor {
     pub restart: RestartPolicy,
     #[serde(default)]
     pub autostart: bool,
+    #[serde(default)]
+    pub session: SessionScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<Schedule>,
 }
@@ -190,7 +200,11 @@ fn plan_systemd(descriptor: &AutomationDescriptor) -> Result<AutomationPlan, Str
         exec_start: descriptor.command.clone(),
         environment: descriptor.environment.clone(),
         restart: descriptor.restart,
-        wanted_by: "default.target".into(),
+        wanted_by: match descriptor.session {
+            SessionScope::User => "default.target",
+            SessionScope::Graphical => "graphical-session.target",
+        }
+        .into(),
     }];
     if let Some(schedule) = &descriptor.schedule {
         artifacts.push(UnitDescriptor::Timer {
@@ -252,6 +266,9 @@ fn validate(descriptor: &AutomationDescriptor) -> Result<(), String> {
             return Err(format!("invalid automation environment value for {key}"));
         }
     }
+    if descriptor.session == SessionScope::Graphical && descriptor.schedule.is_some() {
+        return Err("graphical session automation does not support a schedule".into());
+    }
     if descriptor.kind == AutomationKind::OneShot && descriptor.restart == RestartPolicy::Always {
         return Err("one-shot automation cannot always restart".into());
     }
@@ -271,6 +288,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn graphical_session_is_explicit_and_old_descriptors_remain_user_scoped() {
+        let mut value = serde_json::json!({"schema_version":1,"id":"test-session","description":"test","command":["/opt/kitsune"],"kind":"daemon","autostart":true});
+        let old: AutomationDescriptor = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(old.session, SessionScope::User);
+        value["session"] = "graphical".into();
+        let descriptor: AutomationDescriptor = serde_json::from_value(value).unwrap();
+        let plan = serde_json::to_value(
+            plan_automation(&descriptor, ServiceManagerKind::SystemdUser).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan["artifacts"][0]["wanted_by"],
+            "graphical-session.target"
+        );
+        let invalid = AutomationDescriptor {
+            schedule: Some(Schedule {
+                every_seconds: 30,
+                startup_delay_seconds: None,
+            }),
+            ..descriptor
+        };
+        assert!(plan_automation(&invalid, ServiceManagerKind::SystemdUser).is_err());
+    }
+    #[test]
     fn portable_schedule_becomes_service_and_timer() {
         let plan = plan_automation(
             &AutomationDescriptor {
@@ -282,6 +323,7 @@ mod tests {
                 kind: AutomationKind::OneShot,
                 restart: RestartPolicy::No,
                 autostart: false,
+                session: SessionScope::User,
                 schedule: Some(Schedule {
                     startup_delay_seconds: Some(2),
                     every_seconds: 600,
@@ -311,6 +353,7 @@ mod tests {
             kind: AutomationKind::Daemon,
             restart: RestartPolicy::OnFailure,
             autostart: true,
+            session: SessionScope::User,
             schedule: None,
         };
         assert!(plan_automation(&descriptor, ServiceManagerKind::SystemdUser).is_err());
@@ -328,6 +371,7 @@ mod tests {
                 kind: AutomationKind::OneShot,
                 restart: RestartPolicy::OnFailure,
                 autostart: true,
+                session: SessionScope::User,
                 schedule: None,
             },
             ServiceManagerKind::SystemdUser,
@@ -353,6 +397,7 @@ mod tests {
             kind: AutomationKind::OneShot,
             restart: RestartPolicy::Always,
             autostart: true,
+            session: SessionScope::User,
             schedule: None,
         };
         assert!(plan_automation(&descriptor, ServiceManagerKind::SystemdUser).is_err());

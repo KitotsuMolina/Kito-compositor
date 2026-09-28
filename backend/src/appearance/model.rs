@@ -47,7 +47,24 @@ pub struct PaletteCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColorFamily {
+    pub light: String,
+    pub mid: String,
+    pub dark: String,
+    pub pixel_count: u64,
+    pub coverage: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WallpaperPalette {
+    #[serde(default)]
+    pub algorithm_version: u32,
+    #[serde(default)]
+    pub families: std::collections::BTreeMap<String, Option<ColorFamily>>,
+    #[serde(default)]
+    pub sampled_pixels: u64,
+    #[serde(default)]
+    pub excluded_transparent_pixels: u64,
     pub dominant: String,
     pub vibrant: String,
     pub muted: String,

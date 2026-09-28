@@ -26,7 +26,9 @@ impl PaletteCache {
     pub fn load(&self, image: &Path) -> Option<WallpaperPalette> {
         let path = self.path(image).ok()?;
         let bytes = fs::read(path).ok()?;
-        serde_json::from_slice(&bytes).ok()
+        serde_json::from_slice::<WallpaperPalette>(&bytes)
+            .ok()
+            .filter(|p| p.algorithm_version == super::palette::ALGORITHM_VERSION)
     }
 
     pub fn store(&self, image: &Path, palette: &WallpaperPalette) -> Result<(), String> {
@@ -52,9 +54,41 @@ impl PaletteCache {
             .map(|value| value.as_nanos())
             .unwrap_or_default();
         let mut hasher = DefaultHasher::new();
+        super::palette::ALGORITHM_VERSION.hash(&mut hasher);
         image.hash(&mut hasher);
         metadata.len().hash(&mut hasher);
         modified.hash(&mut hasher);
         Ok(self.root.join(format!("{:016x}.json", hasher.finish())))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn old_algorithm_cache_is_rejected_even_at_current_key() {
+        let root = std::env::temp_dir().join(format!(
+            "palette-cache-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let image = root.join("image.png");
+        image::RgbImage::from_pixel(2, 2, image::Rgb([180, 60, 180]))
+            .save(&image)
+            .unwrap();
+        let cache = PaletteCache {
+            root: root.join("cache"),
+        };
+        let mut palette = crate::appearance::palette::extract(&image).unwrap();
+        cache.store(&image, &palette).unwrap();
+        assert!(cache.load(&image).is_some());
+        palette.algorithm_version = 1;
+        cache.store(&image, &palette).unwrap();
+        assert!(cache.load(&image).is_none());
+        fs::remove_dir_all(root).unwrap();
     }
 }

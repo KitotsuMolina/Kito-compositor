@@ -9,6 +9,8 @@ mod provider;
 mod runner;
 mod sddm;
 mod service;
+mod session;
+pub use session::graphical_session;
 mod unit_manager;
 mod wallpaper;
 
@@ -22,8 +24,8 @@ pub use appearance::{
 pub use applications::{ApplicationCatalog, application_matches};
 pub use automation::{
     AutomationBatchDescriptor, AutomationDescriptor, AutomationKind, AutomationPlan,
-    AutomationStatus, Schedule, ServiceManagerKind, control_automation, detect_service_manager,
-    plan_automation, plan_automation_batch, remove_automation,
+    AutomationStatus, Schedule, ServiceManagerKind, SessionScope, control_automation,
+    detect_service_manager, plan_automation, plan_automation_batch, remove_automation,
 };
 pub use events::EventTracker;
 pub use model::{

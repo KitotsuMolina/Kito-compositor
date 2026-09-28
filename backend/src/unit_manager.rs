@@ -405,9 +405,15 @@ fn render(descriptor: &UnitDescriptor) -> Result<(String, String, String), Strin
                 RestartPolicy::No => "",
                 RestartPolicy::OnFailure | RestartPolicy::Always => "RestartSec=2s\n",
             };
+            let session_dependencies = if wanted_by == "graphical-session.target" {
+                "PartOf=graphical-session.target\nAfter=graphical-session-pre.target\n"
+            } else {
+                ""
+            };
             let content = format!(
-                "[Unit]\nDescription={}\n\n[Service]\nType=simple\n{}ExecStart={}\nRestart={}\n{}\n[Install]\nWantedBy={}\n",
+                "[Unit]\nDescription={}\n{}\n[Service]\nType=simple\n{}ExecStart={}\nRestart={}\n{}\n[Install]\nWantedBy={}\n",
                 escape_percent(description),
+                session_dependencies,
                 environment_lines,
                 command,
                 restart.as_systemd(),
@@ -630,6 +636,28 @@ mod tests {
         (root.join("units"), root.join("state/registry.json"), root)
     }
 
+    #[test]
+    fn graphical_services_stop_with_session_without_ordering_cycle() {
+        let (units, registry, _) = roots("graphical-plan");
+        let manager = UnitManager::new(FakeExecutor::default(), units, registry);
+        let plan = manager
+            .plan(&UnitDescriptor::Service {
+                id: "spectrum".into(),
+                unit_name: "spectrum.service".into(),
+                description: "Spectrum".into(),
+                exec_start: vec!["/opt/kitsune".into()],
+                environment: BTreeMap::new(),
+                restart: RestartPolicy::OnFailure,
+                wanted_by: "graphical-session.target".into(),
+            })
+            .unwrap();
+        assert!(plan.content.contains("PartOf=graphical-session.target\n"));
+        assert!(
+            plan.content
+                .contains("After=graphical-session-pre.target\n")
+        );
+        assert!(!plan.content.contains("After=graphical-session.target\n"));
+    }
     #[test]
     fn renders_typed_service_and_escapes_systemd_specifiers() {
         let (units, registry, root) = roots("plan");

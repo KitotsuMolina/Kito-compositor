@@ -652,6 +652,15 @@ fn appearance_preview_returns_a_cached_normalized_palette() {
     let first: Value = serde_json::from_slice(&first.stdout).unwrap();
     assert_eq!(first["command"], "appearance preview");
     assert_eq!(first["data"]["cache_hit"], false);
+    assert_eq!(first["data"]["palette"]["algorithm_version"], 2);
+    assert_eq!(
+        first["data"]["palette"]["families"]
+            .as_object()
+            .unwrap()
+            .len(),
+        6
+    );
+    assert!(first["data"]["palette"]["families"]["green"].is_null());
     assert!(
         first["data"]["palette"]["candidates"]
             .as_array()
